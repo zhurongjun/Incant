@@ -1,5 +1,5 @@
 <Solution>
-  <Project Path="Incant.Demo/Incant.Demo.csproj" />
+  <Project Path="Incant/Incant.csproj" />
   <Folder Name="/Legacy/">
     <Project Path="Legacy/SB/SB.csproj" />
     <Project Path="Legacy/SB/SB.Base/SB.Base.csproj" />

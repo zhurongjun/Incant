@@ -1,0 +1,169 @@
+name: nuget-publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: nuget-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  pack:
+    name: Pack package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: ga
+
+      - name: Determine package version
+        id: version
+        shell: bash
+        run: |
+          tag_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          main_commit="$(git rev-parse "refs/remotes/origin/main^{commit}")"
+
+          if ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
+            echo "Tag '$GITHUB_REF_NAME' does not point to a commit contained in main." >&2
+            exit 1
+          fi
+
+          version="${GITHUB_REF_NAME#v}"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(preview|rc)\.[0-9]+)?$ ]]; then
+            echo "Tag '$GITHUB_REF_NAME' is not an allowed release version." >&2
+            echo "Expected vX.Y.Z, vX.Y.Z-preview.N, or vX.Y.Z-rc.N." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore Incant/Incant.csproj
+
+      - name: Pack
+        run: >-
+          dotnet pack Incant/Incant.csproj
+          --configuration Release
+          --no-restore
+          --output build/packages
+          -p:PackageVersion=${{ steps.version.outputs.version }}
+          -p:ContinuousIntegrationBuild=true
+
+      - name: Upload package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Incant-${{ steps.version.outputs.version }}
+          path: build/packages/Incant.${{ steps.version.outputs.version }}.nupkg
+          if-no-files-found: error
+
+  verify:
+    name: Verify package (${{ matrix.os }})
+    needs: pack
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+
+    steps:
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: ga
+
+      - name: Download package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: Incant-${{ needs.pack.outputs.version }}
+          path: build/packages
+
+      - name: Install package
+        run: >-
+          dotnet tool install Incant
+          --tool-path build/tool
+          --add-source build/packages
+          --version ${{ needs.pack.outputs.version }}
+
+      - name: Run and verify
+        shell: pwsh
+        run: |
+          $executable = Join-Path $PWD "build/tool/incant"
+
+          if ($IsWindows) {
+              $executable += ".exe"
+          }
+
+          $output = (& $executable | Out-String).Trim()
+
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          if ($output -ne "Hello, World!") {
+              throw "Unexpected output: '$output'"
+          }
+
+          Write-Host $output
+
+  publish:
+    name: Publish to NuGet.org
+    needs:
+      - pack
+      - verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: nuget
+      url: https://www.nuget.org/packages/Incant/${{ needs.pack.outputs.version }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: Incant-${{ needs.pack.outputs.version }}
+          path: build/packages
+
+      - name: NuGet login
+        id: login
+        uses: NuGet/login@d22cc5f58ff5b88bf9bd452535b4335137e24544 # v1.1.0
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push package
+        run: >-
+          dotnet nuget push build/packages/Incant.${{ needs.pack.outputs.version }}.nupkg
+          --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json

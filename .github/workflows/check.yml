@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  demo:
-    name: Incant.Demo (${{ matrix.os }})
+  incant:
+    name: Incant (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
 
@@ -47,15 +47,15 @@ jobs:
           dotnet-quality: ga
 
       - name: Restore
-        run: dotnet restore Incant.Demo/Incant.Demo.csproj
+        run: dotnet restore Incant/Incant.csproj
 
       - name: Build
-        run: dotnet build Incant.Demo/Incant.Demo.csproj --configuration Release --no-restore
+        run: dotnet build Incant/Incant.csproj --configuration Release --no-restore
 
       - name: Run and verify
         shell: pwsh
         run: |
-          $output = (dotnet run --project Incant.Demo/Incant.Demo.csproj --configuration Release --no-build | Out-String).Trim()
+          $output = (dotnet run --project Incant/Incant.csproj --configuration Release --no-build | Out-String).Trim()
 
           if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE

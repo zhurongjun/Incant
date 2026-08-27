@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>incant</ToolCommandName>
+    <PackageId>Incant</PackageId>
+    <Authors>rong</Authors>
+    <Description>A modern and easy-to-use C++ build system written in C#.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/zhurongjun/Incant</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/zhurongjun/Incant.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>cpp;build;build-system;dotnet-tool</PackageTags>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+  </PropertyGroup>
+</Project>
