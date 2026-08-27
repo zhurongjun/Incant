@@ -1,0 +1,7 @@
+<Project>
+   <PropertyGroup>
+      <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">$(MSBuildThisFileDirectory)..\build\.tools\$(MSBuildProjectName)\obj</BaseIntermediateOutputPath>
+      <BaseOutputPath Condition="'$(BaseOutputPath)' == ''">$(MSBuildThisFileDirectory)..\build\.tools\$(MSBuildProjectName)\bin</BaseOutputPath>
+      <NuGetAudit>false</NuGetAudit>
+   </PropertyGroup>
+</Project>

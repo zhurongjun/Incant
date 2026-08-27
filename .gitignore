@@ -1,0 +1,52 @@
+# .NET build outputs
+[Bb]in/
+[Oo]bj/
+/build/
+/artifacts/
+/.tools/
+*.binlog
+
+# Test and coverage results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+coverage-*.xml
+
+# NuGet packages and generated metadata
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+project.lock.json
+project.fragment.lock.json
+
+# Visual Studio user state
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# JetBrains Rider and ReSharper
+.idea/
+_ReSharper*/
+*.DotSettings.user
+*.sln.iml
+
+# MonoDevelop and Visual Studio for Mac
+*.userprefs
+*.pidb
+*.booproj
+
+# Operating-system and temporary files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+*.tmp
+*.bak
+*.swp
+*~
