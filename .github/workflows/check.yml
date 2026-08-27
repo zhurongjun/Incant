@@ -1,0 +1,68 @@
+name: check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  demo:
+    name: Incant.Demo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      DOTNET_NOLOGO: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: ga
+
+      - name: Restore
+        run: dotnet restore Incant.Demo/Incant.Demo.csproj
+
+      - name: Build
+        run: dotnet build Incant.Demo/Incant.Demo.csproj --configuration Release --no-restore
+
+      - name: Run and verify
+        shell: pwsh
+        run: |
+          $output = (dotnet run --project Incant.Demo/Incant.Demo.csproj --configuration Release --no-build | Out-String).Trim()
+
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          if ($output -ne "Hello, World!") {
+              throw "Unexpected output: '$output'"
+          }
+
+          Write-Host $output
