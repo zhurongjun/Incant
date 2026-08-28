@@ -23,14 +23,14 @@
 
 ## 命令样板
 
-运行范围按“测试方法 → 测试类 → 测试项目”逐步扩大；以下命令以现有冒烟测试为例：
+运行范围按“测试方法 → 测试类 → 测试项目”逐步扩大；以下命令以现有 `Writer` 测试为例：
 
 ```shell
 # 单个测试方法：开发和排查时的默认起点
-dotnet test Tests/Incant.UnitTests/Incant.UnitTests.csproj -- --filter-method Incant.UnitTests.TestInfrastructureSmokeTests.TestAssemblyHasExpectedName
+dotnet test Tests/Incant.UnitTests/Incant.UnitTests.csproj -- --filter-method Incant.UnitTests.Cli.WriterTests.NewWriterIsEmpty
 
 # 单个测试类：同一行为涉及多个测试时使用
-dotnet test Tests/Incant.UnitTests/Incant.UnitTests.csproj -- --filter-class Incant.UnitTests.TestInfrastructureSmokeTests
+dotnet test Tests/Incant.UnitTests/Incant.UnitTests.csproj -- --filter-class Incant.UnitTests.Cli.WriterTests
 
 # 单个测试项目：修改影响整个测试项目时使用
 dotnet test Tests/Incant.UnitTests/Incant.UnitTests.csproj

@@ -17,4 +17,8 @@
     <PackageTags>cpp;build;build-system;dotnet-tool</PackageTags>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Incant.Base/Incant.Base.csproj" />
+  </ItemGroup>
 </Project>

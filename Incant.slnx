@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/Source/">
+    <Project Path="Source/Incant.Base/Incant.Base.csproj" />
     <Project Path="Source/Incant/Incant.csproj" />
   </Folder>
   <Folder Name="/Tests/">
