@@ -50,3 +50,6 @@ Desktop.ini
 *.bak
 *.swp
 *~
+
+# Vscode
+.VSCodeCounter
