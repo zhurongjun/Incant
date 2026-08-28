@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Incant.Base.Cli;
 
 /// <summary>Represents one classified command-line token.</summary>
@@ -200,6 +202,14 @@ public class Token
         {
             result._kind = TokenKind.Option;
         }
+        else if (raw.Length >= 2
+            && raw[0] == '-'
+            && raw[1] >= '0'
+            && raw[1] <= '9'
+            && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+        {
+            result._kind = TokenKind.Argument;
+        }
         else if (raw.StartsWith("-") && raw.Length >= 2)
         {
             result._kind = TokenKind.ShortOption;
@@ -395,9 +405,8 @@ public interface IOption
     /// <summary>Gets the default value displayed in help output.</summary>
     public string DefaultValue { get; }
 
-    /// <summary>Gets the type name displayed in help output.</summary>
-    /// <returns>The display type name.</returns>
-    public string DumpTypeName();
+    /// <summary>Gets the value type name displayed in help output.</summary>
+    public string ValueTypeName { get; }
 
     /// <summary>Assigns a parsed value to the option.</summary>
     /// <param name="context">The active parse context.</param>
@@ -414,6 +423,9 @@ public interface IRestOption
 {
     /// <summary>Gets the user-facing help text for remaining arguments.</summary>
     public string Help { get; }
+
+    /// <summary>Gets a value indicating whether at least one remaining argument must be provided.</summary>
+    public bool IsRequired { get; }
 
     /// <summary>Gets a value indicating whether options may appear between remaining arguments.</summary>
     public bool AllowMixed { get; }
@@ -434,119 +446,359 @@ public class Command
     /// <returns>The command exit code.</returns>
     public delegate int ExecuteDelegate();
 
+    private readonly List<IOption> _options = [];
+    private readonly List<Command> _subCommands = [];
+    private IRestOption? _restOption;
+
     #region Config
-    /// <summary>Gets or sets the full command name.</summary>
-    public string Name { get; set; } = string.Empty;
+    /// <summary>Gets the full command name.</summary>
+    public required string Name { get; init; }
 
-    /// <summary>Gets or sets the optional short command name.</summary>
-    public char? ShortName { get; set; }
+    /// <summary>Gets the optional short command name.</summary>
+    public char? ShortName { get; init; }
 
-    /// <summary>Gets or sets the user-facing command help text.</summary>
-    public string Help { get; set; } = string.Empty;
+    /// <summary>Gets the user-facing command help text.</summary>
+    public required string Help { get; init; }
 
-    /// <summary>Gets or sets the usage text displayed in command help.</summary>
-    public string Usage { get; set; } = string.Empty;
+    /// <summary>Gets the usage text displayed in command help.</summary>
+    public required string Usage { get; init; }
+
+    /// <summary>Gets the banner used instead of the parser's default banner when nonempty.</summary>
+    public string CustomBanner { get; init; } = string.Empty;
+
+    /// <summary>Gets a value indicating whether invoking this command prints help instead of executing.</summary>
+    public bool IsHelpCommand { get; init; }
     #endregion
 
     #region exec info
 
-    /// <summary>Gets or sets the command executor.</summary>
-    public ExecuteDelegate? Execute { get; set; }
+    /// <summary>Gets the command executor used when this is not a help command.</summary>
+    public ExecuteDelegate? Execute { get; init; }
 
-    /// <summary>Gets or sets the command options.</summary>
-    public List<IOption> Options { get; set; } = new();
-
-    /// <summary>Gets or sets the receiver for remaining arguments.</summary>
-    public IRestOption? RestOption { get; set; }
-
-    /// <summary>Gets or sets the available subcommands.</summary>
-    public List<Command> SubCommands { get; set; } = new();
-    #endregion
-
-    /// <summary>Validates that option names and short names are unique.</summary>
-    /// <exception cref="InvalidOperationException">A long or short option name is duplicated.</exception>
-    public void CheckOptions()
+    /// <summary>Gets the command options.</summary>
+    /// <exception cref="ArgumentNullException">The configured option collection is <see langword="null"/>.</exception>
+    public IReadOnlyList<IOption> Options
     {
-        Dictionary<string, IOption> seenOptions = new();
-        Dictionary<char, IOption> seenShortOptions = new();
-
-        foreach (IOption option in Options)
+        get => _options;
+        init
         {
-            if (seenOptions.ContainsKey(option.Name))
+            ArgumentNullException.ThrowIfNull(value);
+            _options.Clear();
+            foreach (IOption option in value)
             {
-                throw new InvalidOperationException($"Duplicate option name: {option.Name}");
-            }
-            seenOptions[option.Name] = option;
-
-            if (option.ShortName != null)
-            {
-                if (seenShortOptions.ContainsKey(option.ShortName.Value))
-                {
-                    throw new InvalidOperationException($"Duplicate short option name: {option.ShortName}");
-                }
-                seenShortOptions[option.ShortName.Value] = option;
+                AddOption(option);
             }
         }
     }
 
-    /// <summary>Validates that subcommand names and short names are unique.</summary>
-    /// <exception cref="InvalidOperationException">A full or short subcommand name is duplicated.</exception>
-    public void CheckSubCommands()
+    /// <summary>Gets the receiver for remaining arguments.</summary>
+    public IRestOption? RestOption
     {
-        Dictionary<string, Command> seenSubCommands = new();
-        Dictionary<char, Command> seenShortSubCommands = new();
+        get => _restOption;
+        init => _restOption = value;
+    }
+
+    /// <summary>Gets the available subcommands.</summary>
+    /// <exception cref="ArgumentNullException">The configured subcommand collection is <see langword="null"/>.</exception>
+    public IReadOnlyList<Command> SubCommands
+    {
+        get => _subCommands;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _subCommands.Clear();
+            foreach (Command command in value)
+            {
+                AddSubCommand(command);
+            }
+        }
+    }
+    #endregion
+
+    /// <summary>Finds an option by its full name, or by short name when given one character.</summary>
+    /// <param name="name">The full option name or one-character short name.</param>
+    /// <returns>The matching option, or <see langword="null"/> when no option matches.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
+    public IOption? FindOption(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        if (name.Length == 1)
+        {
+            return FindOption(name[0]);
+        }
+
+        return Options.FirstOrDefault(option => string.Equals(option.Name, name, StringComparison.Ordinal));
+    }
+
+    /// <summary>Finds an option by its short name.</summary>
+    /// <param name="shortName">The short-option character.</param>
+    /// <returns>The matching option, or <see langword="null"/> when no option matches.</returns>
+    public IOption? FindOption(char shortName)
+    {
+        return Options.FirstOrDefault(option => option.ShortName == shortName);
+    }
+
+    /// <summary>Finds a typed option by its full name, or by short name when given one character.</summary>
+    /// <typeparam name="TOption">The expected option type.</typeparam>
+    /// <param name="name">The full option name or one-character short name.</param>
+    /// <returns>The matching typed option, or <see langword="null"/> when its name or type does not match.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
+    public TOption? FindOption<TOption>(string name)
+        where TOption : class, IOption
+    {
+        return FindOption(name) as TOption;
+    }
+
+    /// <summary>Finds a typed option by its short name.</summary>
+    /// <typeparam name="TOption">The expected option type.</typeparam>
+    /// <param name="shortName">The short-option character.</param>
+    /// <returns>The matching typed option, or <see langword="null"/> when its name or type does not match.</returns>
+    public TOption? FindOption<TOption>(char shortName)
+        where TOption : class, IOption
+    {
+        return FindOption(shortName) as TOption;
+    }
+
+    /// <summary>Finds a subcommand by its full name, or by short name when given one character.</summary>
+    /// <param name="name">The full subcommand name or one-character short name.</param>
+    /// <returns>The matching subcommand, or <see langword="null"/> when no subcommand matches.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
+    public Command? FindSubCommand(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        if (name.Length == 1)
+        {
+            return FindSubCommand(name[0]);
+        }
+
+        return SubCommands.FirstOrDefault(
+            command => string.Equals(command.Name, name, StringComparison.Ordinal));
+    }
+
+    /// <summary>Finds a subcommand by its short name.</summary>
+    /// <param name="shortName">The short subcommand name.</param>
+    /// <returns>The matching subcommand, or <see langword="null"/> when no subcommand matches.</returns>
+    public Command? FindSubCommand(char shortName)
+    {
+        return SubCommands.FirstOrDefault(command => command.ShortName == shortName);
+    }
+
+    /// <summary>Adds an option to this command.</summary>
+    /// <param name="option">The option to add.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="option"/> is <see langword="null"/>.</exception>
+    public void AddOption(IOption option)
+    {
+        ArgumentNullException.ThrowIfNull(option);
+        _options.Add(option);
+    }
+
+    /// <summary>Sets the receiver for remaining arguments.</summary>
+    /// <param name="restOption">The receiver to set.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="restOption"/> is <see langword="null"/>.</exception>
+    public void SetRestOption(IRestOption restOption)
+    {
+        ArgumentNullException.ThrowIfNull(restOption);
+        _restOption = restOption;
+    }
+
+    /// <summary>Removes the first occurrence of an option instance.</summary>
+    /// <param name="option">The option instance to remove.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="option"/> is <see langword="null"/>.</exception>
+    public void RemoveOption(IOption option)
+    {
+        ArgumentNullException.ThrowIfNull(option);
+        int index = _options.FindIndex(candidate => ReferenceEquals(candidate, option));
+        if (index >= 0)
+        {
+            _options.RemoveAt(index);
+        }
+    }
+
+    /// <summary>Removes every option with the specified full name.</summary>
+    /// <param name="name">The full option name to remove.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
+    public void RemoveOption(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        _options.RemoveAll(option => string.Equals(option.Name, name, StringComparison.Ordinal));
+    }
+
+    /// <summary>Removes all options from this command.</summary>
+    public void ClearOptions()
+    {
+        _options.Clear();
+    }
+
+    /// <summary>Removes the receiver for remaining arguments.</summary>
+    public void ClearRestOption()
+    {
+        _restOption = null;
+    }
+
+    /// <summary>Adds a subcommand to this command.</summary>
+    /// <param name="command">The subcommand to add.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="command"/> is <see langword="null"/>.</exception>
+    public void AddSubCommand(Command command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        _subCommands.Add(command);
+    }
+
+    /// <summary>Removes the first occurrence of a subcommand instance.</summary>
+    /// <param name="command">The subcommand instance to remove.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="command"/> is <see langword="null"/>.</exception>
+    public void RemoveSubCommand(Command command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        int index = _subCommands.FindIndex(candidate => ReferenceEquals(candidate, command));
+        if (index >= 0)
+        {
+            _subCommands.RemoveAt(index);
+        }
+    }
+
+    /// <summary>Removes every subcommand with the specified full name.</summary>
+    /// <param name="name">The full subcommand name to remove.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is <see langword="null"/>.</exception>
+    public void RemoveSubCommand(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        _subCommands.RemoveAll(command => string.Equals(command.Name, name, StringComparison.Ordinal));
+    }
+
+    /// <summary>Removes all subcommands from this command.</summary>
+    public void ClearSubCommands()
+    {
+        _subCommands.Clear();
+    }
+
+    /// <summary>Checks option names on this command and, optionally, all descendants.</summary>
+    /// <param name="recursive">Whether to check options on descendant commands.</param>
+    /// <exception cref="InvalidOperationException">
+    /// An option name is too short, or a full or short option name is duplicated.
+    /// </exception>
+    public void CheckOptions(bool recursive = false)
+    {
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<char> seenShortNames = [];
+
+        foreach (IOption option in Options)
+        {
+            if (string.IsNullOrEmpty(option.Name) || option.Name.Length <= 1)
+            {
+                throw new InvalidOperationException($"Option name too short: --{option.Name}");
+            }
+
+            if (!seenNames.Add(option.Name))
+            {
+                throw new InvalidOperationException($"Duplicate option name: --{option.Name}");
+            }
+
+            if (option.ShortName is char shortName && !seenShortNames.Add(shortName))
+            {
+                throw new InvalidOperationException($"Duplicate option short name: -{shortName}");
+            }
+        }
+
+        if (recursive)
+        {
+            foreach (Command subCommand in SubCommands)
+            {
+                subCommand.CheckOptions(true);
+            }
+        }
+    }
+
+    /// <summary>Checks subcommand names on this command and, optionally, all descendants.</summary>
+    /// <param name="recursive">Whether to check subcommands on descendant commands.</param>
+    /// <exception cref="InvalidOperationException">
+    /// A subcommand name is too short, or a full or short subcommand name is duplicated.
+    /// </exception>
+    public void CheckSubCommands(bool recursive = false)
+    {
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<char> seenShortNames = [];
 
         foreach (Command subCommand in SubCommands)
         {
-            if (seenSubCommands.ContainsKey(subCommand.Name))
+            if (string.IsNullOrEmpty(subCommand.Name) || subCommand.Name.Length <= 1)
             {
-                throw new InvalidOperationException($"Duplicate sub command name: {subCommand.Name}");
+                throw new InvalidOperationException($"Sub-command name too short: {subCommand.Name}");
             }
-            seenSubCommands[subCommand.Name] = subCommand;
 
-            if (subCommand.ShortName != null)
+            if (!seenNames.Add(subCommand.Name))
             {
-                if (seenShortSubCommands.ContainsKey(subCommand.ShortName.Value))
-                {
-                    throw new InvalidOperationException($"Duplicate short sub command name: {subCommand.ShortName}");
-                }
-                seenShortSubCommands[subCommand.ShortName.Value] = subCommand;
+                throw new InvalidOperationException($"Duplicate sub-command name: {subCommand.Name}");
+            }
+
+            if (subCommand.ShortName is char shortName && !seenShortNames.Add(shortName))
+            {
+                throw new InvalidOperationException($"Duplicate sub-command short name: -{shortName}");
             }
         }
+
+        if (recursive)
+        {
+            foreach (Command subCommand in SubCommands)
+            {
+                subCommand.CheckSubCommands(true);
+            }
+        }
+    }
+
+    /// <summary>Checks options and subcommands on this command and, optionally, all descendants.</summary>
+    /// <param name="recursive">Whether to check the complete descendant command tree.</param>
+    /// <exception cref="InvalidOperationException">
+    /// An option or subcommand name is too short, or a full or short name is duplicated.
+    /// </exception>
+    public void CheckAll(bool recursive = false)
+    {
+        CheckOptions(recursive);
+        CheckSubCommands(recursive);
     }
 
     /// <summary>Writes help for the command, subcommands, options, and remaining arguments.</summary>
     /// <param name="writer">The writer that receives the formatted help text.</param>
-    /// <param name="banner">The banner displayed at the start of the help text.</param>
-    public void WriteHelp(Writer writer, string banner)
+    /// <param name="defaultBanner">The default banner used when <see cref="CustomBanner"/> is empty.</param>
+    public void WriteHelp(Writer writer, string defaultBanner)
     {
-        writer
-            .StyleBold().StyleFrontGreen()
-            .Write(banner)
-            .StyleClear();
-        writer
-            .StyleFrontGreen()
-            .StyleBold()
-            .WriteKeepIndent(Help)
-            .StyleClear()
-            .NextLine();
+        string selectedBanner = string.IsNullOrEmpty(CustomBanner) ? defaultBanner : CustomBanner;
+        if (!string.IsNullOrEmpty(selectedBanner))
+        {
+            writer
+                .StyleBold().StyleFrontGreen()
+                .Write(selectedBanner)
+                .StyleClear();
+        }
 
-        writer
-            .StyleBold()
-            .Write("Usage: ")
-            .StyleClear()
-            .StyleFrontBlue()
-            .WriteKeepIndent(Usage)
-            .StyleClear()
-            .NextLine();
+        if (!string.IsNullOrEmpty(Help))
+        {
+            writer
+                .StyleFrontGreen()
+                .StyleBold()
+                .WriteKeepIndent(Help)
+                .StyleClear()
+                .NextLine();
+        }
+
+        if (!string.IsNullOrEmpty(Usage))
+        {
+            writer
+                .StyleBold()
+                .Write("Usage: ")
+                .StyleClear()
+                .StyleFrontBlue()
+                .WriteKeepIndent(Usage)
+                .StyleClear()
+                .NextLine();
+        }
 
         if (SubCommands.Count != 0)
         {
             writer
                 .StyleBold()
-                .Write("Sub Commands:")
-                .StyleClear()
-                .NextLine();
+                .WriteLine("Sub-Commands:")
+                .StyleClear();
 
             int maxSubCommandLength = 0;
             foreach (Command subCommand in SubCommands)
@@ -585,7 +837,7 @@ public class Command
         {
             writer
                 .StyleBold()
-                .WriteLine("Options:")
+                .WriteLine("Options: ")
                 .StyleClear();
 
             int maxOptionLength = 0;
@@ -598,7 +850,7 @@ public class Command
                 optionLength += 2 + option.Name.Length;
                 maxOptionLength = Math.Max(optionLength, maxOptionLength);
 
-                int typeLength = option.DumpTypeName().Length;
+                int typeLength = option.ValueTypeName.Length;
                 maxTypeLength = Math.Max(typeLength, maxTypeLength);
 
                 int defaultLength = option.DefaultValue.Length;
@@ -607,7 +859,7 @@ public class Command
 
             foreach (IOption option in Options)
             {
-                string typeText = $"<{option.DumpTypeName()}>".PadRight(maxTypeLength + 2);
+                string typeText = $"<{option.ValueTypeName}>".PadRight(maxTypeLength + 2);
 
                 string defaultText = $"[{option.DefaultValue}]".PadRight(maxDefaultLength + 2);
 
@@ -627,7 +879,13 @@ public class Command
                     IEnumerable<string>? selections = option.Selections;
                     if (selections != null)
                     {
-                        selectionsText = "\n" + string.Join("\n", selections.Select(selection => $"  - {selection}"));
+                        string[] selectionLines = selections
+                            .Select(selection => $"  - {selection}")
+                            .ToArray();
+                        if (selectionLines.Length != 0)
+                        {
+                            selectionsText = "\n\n" + string.Join("\n", selectionLines);
+                        }
                     }
                 }
 
@@ -654,12 +912,13 @@ public class Command
 
         if (RestOption != null)
         {
+            string requiredText = RestOption.IsRequired ? "[REQUIRED] " : string.Empty;
             writer
                 .StyleBold()
-                .WriteLine("Rest Options:")
+                .WriteLine("Rest-Option: ")
                 .StyleClear()
                 .Write("  ")
-                .WriteKeepIndent(RestOption.Help)
+                .WriteKeepIndent($"{requiredText}{RestOption.Help}")
                 .NextLine();
         }
     }
@@ -677,10 +936,16 @@ public class ParseContext
     public Writer Writer { get; init; } = new();
 
     /// <summary>Gets a value indicating whether an error has been reported.</summary>
-    public bool AnyError { get; private set; }
+    public bool AnyError => ErrorCount > 0;
 
     /// <summary>Gets a value indicating whether a warning has been reported.</summary>
-    public bool AnyWarning { get; private set; }
+    public bool AnyWarning => WarningCount > 0;
+
+    /// <summary>Gets the number of reported errors.</summary>
+    public int ErrorCount { get; private set; }
+
+    /// <summary>Gets the number of reported warnings.</summary>
+    public int WarningCount { get; private set; }
 
     /// <summary>Gets the options successfully visited during parsing.</summary>
     public HashSet<IOption> VisitedOptions { get; } = [];
@@ -689,7 +954,7 @@ public class ParseContext
     /// <param name="error">The error message.</param>
     public void Error(string error)
     {
-        AnyError = true;
+        ErrorCount++;
         Writer
             .StyleFrontRed()
             .StyleBold()
@@ -702,7 +967,7 @@ public class ParseContext
     /// <param name="warning">The warning message.</param>
     public void Warning(string warning)
     {
-        AnyWarning = true;
+        WarningCount++;
         Writer
             .StyleFrontYellow()
             .StyleBold()
@@ -724,8 +989,8 @@ public class ParseContext
 /// <summary>Parses command-line arguments and invokes a configured command.</summary>
 public class CommandParser
 {
-    /// <summary>Gets or sets the root command to parse.</summary>
-    public required Command RootCommand { get; set; }
+    /// <summary>Gets the root command to parse.</summary>
+    public required Command RootCommand { get; init; }
 
     /// <summary>Gets or sets whether an unrecognized argument prevents command execution.</summary>
     public bool FailOnUnrecognizedArgument { get; set; } = true;
@@ -736,20 +1001,26 @@ public class CommandParser
     /// <summary>Gets or sets whether a missing option argument prevents command execution.</summary>
     public bool TreatMissingArgumentAsError { get; set; } = true;
 
-    /// <summary>Gets or sets whether help is printed when the selected command has no executor.</summary>
-    public bool PrintHelpWhenCommandHasNoExecutor { get; set; } = true;
-
-    /// <summary>Gets the command exit code, <c>0</c> for help, or <c>-1</c> when neither path ran.</summary>
+    /// <summary>
+    /// Gets the command exit code, <c>0</c> for help or a command without an executor,
+    /// or <c>-1</c> when parsing failed or invocation has not started.
+    /// </summary>
     public int ExitCode { get; private set; } = -1;
 
-    /// <summary>Gets or sets the banner displayed in help output.</summary>
-    public string Banner { get; set; } = string.Empty;
+    /// <summary>Gets or sets the default banner displayed in help output.</summary>
+    public string DefaultBanner { get; set; } = string.Empty;
 
-    /// <summary>Parses arguments and invokes the selected command when validation succeeds.</summary>
+    /// <summary>Checks the command tree, parses arguments, and invokes the selected command.</summary>
     /// <param name="arguments">The command-line arguments to parse.</param>
     /// <returns>The selected command when parsing succeeds; otherwise, <see langword="null"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="arguments"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">The configured command tree is invalid.</exception>
     public Command? Invoke(IEnumerable<string> arguments)
     {
+        ArgumentNullException.ThrowIfNull(arguments);
+        ExitCode = -1;
+        RootCommand.CheckAll(true);
+
         ParseContext context = new()
         {
             Tokens = new TokenList(arguments)
@@ -768,7 +1039,7 @@ public class CommandParser
 
     private Command SolveCommand(ParseContext context)
     {
-        Command currentCommand = RootCommand!;
+        Command currentCommand = RootCommand;
         while (context.Tokens.HasMore())
         {
             Token token = context.Tokens.Peek();
@@ -778,9 +1049,7 @@ public class CommandParser
             }
 
             string commandName = token.Argument;
-            Command? nextCommand = currentCommand.SubCommands.Find(
-                candidate => candidate.Name == commandName
-                    || (candidate.ShortName != null && candidate.ShortName.ToString() == commandName));
+            Command? nextCommand = currentCommand.FindSubCommand(commandName);
             if (nextCommand == null)
             {
                 break;
@@ -807,7 +1076,7 @@ public class CommandParser
                 context.Warning($"These tokens are ignored when printing help: {unusedText}");
             }
 
-            command.WriteHelp(context.Writer, Banner);
+            command.WriteHelp(context.Writer, DefaultBanner);
             context.Writer.Dump();
             return true;
         }
@@ -893,6 +1162,11 @@ public class CommandParser
         if (command.RestOption != null)
         {
             List<string> restArguments = tokenList.RestTokens.Select(restToken => restToken.Raw).ToList();
+            if (command.RestOption.IsRequired && restArguments.Count == 0)
+            {
+                context.Error("Lost REQUIRED remaining arguments");
+            }
+
             command.RestOption.Assign(context, restArguments);
         }
 
@@ -915,26 +1189,28 @@ public class CommandParser
 
         if (!context.AnyError)
         {
-            if (command.Execute != null)
+            if (command.IsHelpCommand)
             {
-                ExitCode = command.Execute.Invoke();
-            }
-            else if (PrintHelpWhenCommandHasNoExecutor)
-            {
-                command.WriteHelp(context.Writer, Banner);
+                command.WriteHelp(context.Writer, DefaultBanner);
                 context.Writer.Dump();
+                ExitCode = 0;
+            }
+            else
+            {
+                ExitCode = command.Execute?.Invoke() ?? 0;
             }
 
             return true;
         }
         else
         {
-            command.WriteHelp(context.Writer, Banner);
+            command.WriteHelp(context.Writer, DefaultBanner);
             context.Writer.Dump();
         }
 
         return false;
     }
+
     private void ParseOption(Command command, Token token, ParseContext context)
     {
         TokenList tokenList = context.Tokens;
@@ -943,7 +1219,14 @@ public class CommandParser
 
         tokenList.Match();
 
-        IOption? option = command.Options.Find(candidate => candidate.Name == optionName);
+        if (optionName.Length < 2)
+        {
+            context.Error(
+                $"Long option name '--{optionName}' must contain at least two characters");
+            return;
+        }
+
+        IOption? option = command.FindOption(optionName);
         if (option == null)
         {
             HandleUnrecognizedOption(token, optionName, context);
@@ -970,16 +1253,26 @@ public class CommandParser
 
         tokenList.Match();
 
+        if (optionNames.Count == 0)
+        {
+            context.Error($"Short option '{token.Raw}' must contain at least one name");
+            return;
+        }
+
         if (optionNames.Count > 1)
         {
             if (optionValue != null)
             {
-                context.Error($"Toggle group -{optionNames} in '{token.Raw}' cannot have a value");
+                string optionNamesText = new(optionNames.ToArray());
+                context.Error($"Toggle group -{optionNamesText} in '{token.Raw}' cannot have a value");
+                return;
             }
 
+            int errorCountBefore = context.ErrorCount;
+            List<IOption> toggleOptions = [];
             foreach (char shortName in optionNames)
             {
-                IOption? option = command.Options.Find(candidate => candidate.ShortName == shortName);
+                IOption? option = command.FindOption(shortName);
                 if (option == null)
                 {
                     HandleUnrecognizedShortOption(token, shortName, context);
@@ -992,15 +1285,25 @@ public class CommandParser
                     }
                     else
                     {
-                        AssignToggle(option, null, token, context);
+                        toggleOptions.Add(option);
                     }
                 }
+            }
+
+            if (context.ErrorCount != errorCountBefore)
+            {
+                return;
+            }
+
+            foreach (IOption option in toggleOptions)
+            {
+                AssignToggle(option, null, token, context);
             }
         }
         else
         {
             char shortName = optionNames[0];
-            IOption? option = command.Options.Find(candidate => candidate.ShortName == shortName);
+            IOption? option = command.FindOption(shortName);
             if (option == null)
             {
                 HandleUnrecognizedShortOption(token, shortName, context);
@@ -1035,7 +1338,7 @@ public class CommandParser
 
     private void AssignOption(IOption option, string? optionValue, Token token, ParseContext context)
     {
-        if (optionValue == null)
+        if (string.IsNullOrEmpty(optionValue))
         {
             HandleOptionMissingArgument(option, token, context);
         }
@@ -1052,6 +1355,7 @@ public class CommandParser
             option.Assign(context, optionValue);
         }
     }
+
     private void HandleUnrecognizedArgument(Token token, ParseContext context)
     {
         string message = $"Unrecognized argument: {token.Raw}";

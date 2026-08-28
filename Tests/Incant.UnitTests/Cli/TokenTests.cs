@@ -5,9 +5,20 @@ namespace Incant.UnitTests.Cli;
 public sealed class TokenTests
 {
     [Theory]
+    [InlineData("", Token.TokenKind.Argument)]
+    [InlineData("-", Token.TokenKind.Argument)]
+    [InlineData("-0", Token.TokenKind.Argument)]
+    [InlineData("-9", Token.TokenKind.Argument)]
+    [InlineData("-1.25", Token.TokenKind.Argument)]
+    [InlineData("-1e3", Token.TokenKind.Argument)]
     [InlineData("target", Token.TokenKind.Argument)]
     [InlineData("--output", Token.TokenKind.Option)]
+    [InlineData("---", Token.TokenKind.Option)]
+    [InlineData("--=value", Token.TokenKind.Option)]
     [InlineData("-o", Token.TokenKind.ShortOption)]
+    [InlineData("-.5", Token.TokenKind.ShortOption)]
+    [InlineData("-9x", Token.TokenKind.ShortOption)]
+    [InlineData("-=value", Token.TokenKind.ShortOption)]
     [InlineData("--", Token.TokenKind.DoubleDash)]
     public void ParseClassifiesRawToken(string raw, Token.TokenKind expectedKind)
     {
@@ -21,10 +32,13 @@ public sealed class TokenTests
     public void LongOptionExposesNameAndOptionalValue()
     {
         Token optionWithoutValue = Token.Parse("--output");
+        Token optionWithEmptyValue = Token.Parse("--output=");
         Token optionWithValue = Token.Parse("--output=build=debug");
 
         Assert.Equal("output", optionWithoutValue.OptionName);
         Assert.Null(optionWithoutValue.OptionValue);
+        Assert.Equal("output", optionWithEmptyValue.OptionName);
+        Assert.Equal(string.Empty, optionWithEmptyValue.OptionValue);
         Assert.Equal("output", optionWithValue.OptionName);
         Assert.Equal("build=debug", optionWithValue.OptionValue);
     }
@@ -32,12 +46,36 @@ public sealed class TokenTests
     [Fact]
     public void ShortOptionExposesNamesAndOptionalValue()
     {
-        Token token = Token.Parse("-abc=value");
+        Token optionWithoutValue = Token.Parse("-a");
+        Token optionWithEmptyValue = Token.Parse("-a=");
+        Token token = Token.Parse("-abc=value=tail");
 
+        Assert.Equal(['a'], optionWithoutValue.ShortOptionNames);
+        Assert.Null(optionWithoutValue.ShortOptionValue);
+        Assert.Equal(['a'], optionWithEmptyValue.ShortOptionNames);
+        Assert.Equal(string.Empty, optionWithEmptyValue.ShortOptionValue);
         Assert.Equal(['a', 'b', 'c'], token.ShortOptionNames);
-        Assert.Equal("value", token.ShortOptionValue);
+        Assert.Equal("value=tail", token.ShortOptionValue);
         Assert.True(token.HasShortOption('b'));
         Assert.False(token.IsShortOptionOf('b'));
+    }
+
+    [Fact]
+    public void OptionPredicatesRequireTheExpectedKindAndExactName()
+    {
+        Token longOption = Token.Parse("--output=value");
+        Token shortOption = Token.Parse("-o");
+        Token shortGroup = Token.Parse("-abc");
+        Token argument = Token.Parse("output");
+
+        Assert.True(longOption.IsOptionOf("output"));
+        Assert.False(longOption.IsOptionOf("Output"));
+        Assert.False(argument.IsOptionOf("output"));
+        Assert.True(shortOption.IsShortOptionOf('o'));
+        Assert.False(shortOption.IsShortOptionOf('O'));
+        Assert.False(shortGroup.IsShortOptionOf('a'));
+        Assert.True(shortGroup.HasShortOption('b'));
+        Assert.False(argument.HasShortOption('b'));
     }
 
     [Fact]
@@ -47,8 +85,12 @@ public sealed class TokenTests
         Token option = Token.Parse("--output");
 
         Assert.Throws<InvalidOperationException>(() => _ = argument.OptionName);
+        Assert.Throws<InvalidOperationException>(() => _ = argument.OptionValue);
+        Assert.Throws<InvalidOperationException>(() => _ = argument.ShortOptionNames);
+        Assert.Throws<InvalidOperationException>(() => _ = argument.ShortOptionValue);
         Assert.Throws<InvalidOperationException>(() => _ = option.Argument);
         Assert.Throws<InvalidOperationException>(() => _ = option.ShortOptionNames);
+        Assert.Throws<InvalidOperationException>(() => _ = option.ShortOptionValue);
     }
 
     [Fact]
@@ -57,79 +99,9 @@ public sealed class TokenTests
         Token token = Token.Unparsed("--literal");
 
         Assert.True(token.IsUnparsed);
+        Assert.False(token.IsArgument);
+        Assert.False(token.IsAnyOption);
+        Assert.False(token.IsDoubleDash);
         Assert.Equal("--literal", token.Raw);
-    }
-}
-
-public sealed class TokenListTests
-{
-    [Fact]
-    public void ConstructorMarksTokensAfterDoubleDashAsUnparsed()
-    {
-        var tokens = new TokenList(["build", "--", "--literal", "tail"]);
-        Token[] allTokens = tokens.AllTokens.ToArray();
-
-        Assert.Equal(
-            [
-                Token.TokenKind.Argument,
-                Token.TokenKind.DoubleDash,
-                Token.TokenKind.Unparsed,
-                Token.TokenKind.Unparsed
-            ],
-            allTokens.Select(token => token.Kind));
-    }
-
-    [Fact]
-    public void MatchAndRestAdvanceIndependentResultCollections()
-    {
-        var tokens = new TokenList(["matched", "rest", "unused"]);
-
-        Token matched = tokens.Match();
-        Token rest = tokens.Rest();
-
-        Assert.Equal("matched", matched.Raw);
-        Assert.Equal("rest", rest.Raw);
-        Assert.Equal(["matched"], tokens.MatchedTokens.Select(token => token.Raw));
-        Assert.Equal(["rest"], tokens.RestTokens.Select(token => token.Raw));
-        Assert.Equal(["unused"], tokens.UnusedTokens.Select(token => token.Raw));
-    }
-
-    [Fact]
-    public void ResetAllUnusedMovesRemainingTokensExceptDoubleDashToRest()
-    {
-        var tokens = new TokenList(["matched", "rest", "--", "tail"]);
-        tokens.Match();
-        tokens.Rest();
-
-        tokens.ResetAllUnused();
-
-        Assert.False(tokens.HasMore());
-        Assert.Equal(["rest", "tail"], tokens.RestTokens.Select(token => token.Raw));
-    }
-
-    [Fact]
-    public void ResetToHeadClearsProgressAndResultCollections()
-    {
-        var tokens = new TokenList(["first", "second"]);
-        tokens.Match();
-        tokens.Rest();
-
-        tokens.ResetToHead();
-
-        Assert.True(tokens.HasMore());
-        Assert.Empty(tokens.MatchedTokens);
-        Assert.Empty(tokens.RestTokens);
-        Assert.Equal("first", tokens.Peek().Raw);
-    }
-
-    [Fact]
-    public void EmptyListRejectsReadOperations()
-    {
-        var tokens = new TokenList(Array.Empty<string>());
-
-        Assert.Throws<InvalidOperationException>(() => tokens.Peek());
-        Assert.Throws<InvalidOperationException>(() => tokens.Match());
-        Assert.Throws<InvalidOperationException>(() => tokens.Rest());
-        Assert.Null(tokens.TryTakeArgument());
     }
 }

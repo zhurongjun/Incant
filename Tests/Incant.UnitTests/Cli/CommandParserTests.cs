@@ -22,22 +22,69 @@ public sealed class CommandParserTests
         Assert.Equal(17, parser.ExitCode);
     }
 
+    [Fact]
+    public void ExitCodeIsMinusOneBeforeFirstInvocation()
+    {
+        CommandParser parser = CreateParser(CreateCommand());
+
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
+    [Fact]
+    public void InvokeRejectsNullArgumentSequence()
+    {
+        CommandParser parser = CreateParser(CreateCommand());
+
+        Assert.Throws<ArgumentNullException>(() => parser.Invoke(null!));
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
+    [Fact]
+    public void ExecutorExceptionPropagatesAndLeavesFailureExitCode()
+    {
+        Command command = CreateCommand(() => throw new InvalidOperationException("execution failed"));
+        CommandParser parser = CreateParser(command);
+
+        InvalidOperationException exception =
+            Assert.Throws<InvalidOperationException>(() => parser.Invoke([]));
+
+        Assert.Equal("execution failed", exception.Message);
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
     [Theory]
     [InlineData("build")]
     [InlineData("b")]
     public void InvokeSelectsSubCommandByFullOrShortName(string commandName)
     {
-        Command subCommand = CreateCommand(() => 23);
-        subCommand.Name = "build";
-        subCommand.ShortName = 'b';
-        Command rootCommand = CreateCommand();
-        rootCommand.SubCommands.Add(subCommand);
+        Command subCommand = CreateCommand(() => 23, name: "build", shortName: 'b');
+        Command rootCommand = CreateCommand(subCommands: [subCommand]);
         CommandParser parser = CreateParser(rootCommand);
 
         Command? invokedCommand = parser.Invoke([commandName]);
 
         Assert.Same(subCommand, invokedCommand);
         Assert.Equal(23, parser.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("build", "run")]
+    [InlineData("b", "r")]
+    public void InvokeSelectsNestedSubCommands(string firstName, string secondName)
+    {
+        Command run = CreateCommand(() => 31, name: "run", shortName: 'r');
+        Command build = CreateCommand(
+            DefaultExecute,
+            subCommands: [run],
+            name: "build",
+            shortName: 'b');
+        Command root = CreateCommand(subCommands: [build]);
+        CommandParser parser = CreateParser(root);
+
+        Command? invokedCommand = parser.Invoke([firstName, secondName]);
+
+        Assert.Same(run, invokedCommand);
+        Assert.Equal(31, parser.ExitCode);
     }
 
     [Theory]
@@ -52,8 +99,7 @@ public sealed class CommandParserTests
             Name = "output",
             ShortName = 'o'
         };
-        Command command = CreateCommand();
-        command.Options.Add(option);
+        Command command = CreateCommand(options: [option]);
         CommandParser parser = CreateParser(command);
         string[] arguments = followingArgument == null
             ? [optionArgument]
@@ -80,9 +126,7 @@ public sealed class CommandParserTests
             ShortName = 'b',
             IsToggle = true
         };
-        Command command = CreateCommand();
-        command.Options.Add(firstOption);
-        command.Options.Add(secondOption);
+        Command command = CreateCommand(options: [firstOption, secondOption]);
         CommandParser parser = CreateParser(command);
 
         Command? invokedCommand = parser.Invoke(["-ab"]);
@@ -90,6 +134,233 @@ public sealed class CommandParserTests
         Assert.Same(command, invokedCommand);
         Assert.Equal(1, firstOption.ToggleCount);
         Assert.Equal(1, secondOption.ToggleCount);
+    }
+
+    [Fact]
+    public void RepeatedValueOptionAssignsEveryOccurrenceInOrder()
+    {
+        var option = new TestOption
+        {
+            Name = "output",
+            ShortName = 'o'
+        };
+        Command command = CreateCommand(options: [option]);
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke(["--output=first", "-o", "second"]);
+
+        Assert.Same(command, invokedCommand);
+        Assert.Equal(["first", "second"], option.AssignedValues);
+    }
+
+    [Fact]
+    public void MissingValueDoesNotConsumeFollowingOption()
+    {
+        var output = new TestOption
+        {
+            Name = "output"
+        };
+        var verbose = new TestOption
+        {
+            Name = "verbose",
+            IsToggle = true
+        };
+        Command command = CreateCommand(options: [output, verbose]);
+        CommandParser parser = CreateParser(command);
+        parser.TreatMissingArgumentAsError = false;
+
+        Command? invokedCommand = parser.Invoke(["--output", "--verbose"]);
+
+        Assert.Same(command, invokedCommand);
+        Assert.Empty(output.AssignedValues);
+        Assert.Equal(1, verbose.ToggleCount);
+    }
+
+    [Theory]
+    [InlineData("--output=")]
+    [InlineData("-o=")]
+    public void ExplicitEmptyValueDoesNotConsumeFollowingArgument(string optionArgument)
+    {
+        var output = new TestOption
+        {
+            Name = "output",
+            ShortName = 'o'
+        };
+        var restOption = new TestRestOption
+        {
+            AllowMixed = true
+        };
+        Command command = CreateCommand(options: [output], restOption: restOption);
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke([optionArgument, "tail"]);
+
+        Assert.Null(invokedCommand);
+        Assert.Empty(output.AssignedValues);
+        Assert.Equal(["tail"], restOption.AssignedValues);
+    }
+
+    [Theory]
+    [InlineData("--=value")]
+    [InlineData("--x")]
+    public void MalformedLongOptionNeverUsesShortAlias(string argument)
+    {
+        var option = new TestOption
+        {
+            Name = "execute",
+            ShortName = 'x',
+            IsToggle = true
+        };
+        Command command = CreateCommand(options: [option]);
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke([argument]);
+
+        Assert.Null(invokedCommand);
+        Assert.Equal(0, option.ToggleCount);
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("-=")]
+    [InlineData("-=value")]
+    public void MalformedShortOptionFailsWithoutThrowing(string argument)
+    {
+        Command command = CreateCommand();
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke([argument]);
+
+        Assert.Null(invokedCommand);
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("-ab=")]
+    [InlineData("-ab=value")]
+    public void ToggleGroupWithAssignedValueFailsWithoutChangingOptions(string argument)
+    {
+        var firstOption = new TestOption
+        {
+            Name = "all",
+            ShortName = 'a',
+            IsToggle = true
+        };
+        var secondOption = new TestOption
+        {
+            Name = "brief",
+            ShortName = 'b',
+            IsToggle = true
+        };
+        Command command = CreateCommand(options: [firstOption, secondOption]);
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke([argument]);
+
+        Assert.Null(invokedCommand);
+        Assert.Equal(0, firstOption.ToggleCount);
+        Assert.Equal(0, secondOption.ToggleCount);
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("-ab")]
+    [InlineData("-ba")]
+    public void ValueOptionInToggleGroupFailsInvocation(string argument)
+    {
+        var output = new TestOption
+        {
+            Name = "all",
+            ShortName = 'a'
+        };
+        var brief = new TestOption
+        {
+            Name = "brief",
+            ShortName = 'b',
+            IsToggle = true
+        };
+        Command command = CreateCommand(options: [output, brief]);
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke([argument]);
+
+        Assert.Null(invokedCommand);
+        Assert.Empty(output.AssignedValues);
+        Assert.Equal(0, brief.ToggleCount);
+    }
+
+    [Theory]
+    [InlineData("-ax")]
+    [InlineData("-xa")]
+    public void UnrecognizedMemberOfToggleGroupFailsWithoutChangingRecognizedOptions(string argument)
+    {
+        var all = new TestOption
+        {
+            Name = "all",
+            ShortName = 'a',
+            IsToggle = true
+        };
+        Command command = CreateCommand(options: [all]);
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke([argument]);
+
+        Assert.Null(invokedCommand);
+        Assert.Equal(0, all.ToggleCount);
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("-ax")]
+    [InlineData("-xa")]
+    public void UnrecognizedMemberOfToggleGroupCanBeHandledAsWarning(string argument)
+    {
+        var all = new TestOption
+        {
+            Name = "all",
+            ShortName = 'a',
+            IsToggle = true
+        };
+        Command command = CreateCommand(options: [all]);
+        CommandParser parser = CreateParser(command);
+        parser.FailOnUnrecognizedOption = false;
+
+        Command? invokedCommand = parser.Invoke([argument]);
+
+        Assert.Same(command, invokedCommand);
+        Assert.Equal(1, all.ToggleCount);
+    }
+
+    [Fact]
+    public void InvalidToggleGroupDoesNotRollbackEarlierTokens()
+    {
+        var all = new TestOption
+        {
+            Name = "all",
+            ShortName = 'a',
+            IsToggle = true
+        };
+        var brief = new TestOption
+        {
+            Name = "brief",
+            ShortName = 'b',
+            IsToggle = true
+        };
+        var output = new TestOption
+        {
+            Name = "output",
+            ShortName = 'o'
+        };
+        Command command = CreateCommand(options: [all, brief, output]);
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke(["-a", "-bo"]);
+
+        Assert.Null(invokedCommand);
+        Assert.Equal(1, all.ToggleCount);
+        Assert.Equal(0, brief.ToggleCount);
+        Assert.Empty(output.AssignedValues);
+        Assert.Equal(-1, parser.ExitCode);
     }
 
     [Fact]
@@ -101,14 +372,31 @@ public sealed class CommandParserTests
             Name = "project",
             IsRequired = true
         };
-        Command command = CreateCommand(() => executionCount++);
-        command.Options.Add(option);
+        Command command = CreateCommand(() => executionCount++, options: [option]);
         CommandParser parser = CreateParser(command);
 
         Command? invokedCommand = parser.Invoke([]);
 
         Assert.Null(invokedCommand);
         Assert.Equal(0, executionCount);
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
+    [Fact]
+    public void MissingRequiredOptionStillFailsWhenMissingValueIsOnlyAWarning()
+    {
+        var option = new TestOption
+        {
+            Name = "project",
+            IsRequired = true
+        };
+        Command command = CreateCommand(options: [option]);
+        CommandParser parser = CreateParser(command);
+        parser.TreatMissingArgumentAsError = false;
+
+        Command? invokedCommand = parser.Invoke(["--project"]);
+
+        Assert.Null(invokedCommand);
         Assert.Equal(-1, parser.ExitCode);
     }
 
@@ -120,8 +408,7 @@ public sealed class CommandParserTests
             Name = "configuration",
             Selections = ["debug", "release"]
         };
-        Command command = CreateCommand();
-        command.Options.Add(option);
+        Command command = CreateCommand(options: [option]);
         CommandParser parser = CreateParser(command);
 
         Command? invokedCommand = parser.Invoke(["--configuration", "profile"]);
@@ -137,8 +424,7 @@ public sealed class CommandParserTests
         {
             Name = "output"
         };
-        Command command = CreateCommand();
-        command.Options.Add(option);
+        Command command = CreateCommand(options: [option]);
         CommandParser parser = CreateParser(command);
         parser.TreatMissingArgumentAsError = false;
 
@@ -172,12 +458,53 @@ public sealed class CommandParserTests
         Assert.Same(command, invokedCommand);
     }
 
+    [Theory]
+    [InlineData("unexpected")]
+    [InlineData("--unexpected")]
+    [InlineData("-x")]
+    public void UnrecognizedInputPreventsExecutionByDefault(string argument)
+    {
+        int executionCount = 0;
+        Command command = CreateCommand(() => executionCount++);
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke([argument]);
+
+        Assert.Null(invokedCommand);
+        Assert.Equal(0, executionCount);
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
+    [Fact]
+    public void DoubleDashWithoutRestOptionPreventsExecutionByDefault()
+    {
+        Command command = CreateCommand();
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke(["--", "tail"]);
+
+        Assert.Null(invokedCommand);
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
+    [Fact]
+    public void DoubleDashWithoutRestOptionCanBeHandledAsWarning()
+    {
+        Command command = CreateCommand();
+        CommandParser parser = CreateParser(command);
+        parser.FailOnUnrecognizedArgument = false;
+
+        Command? invokedCommand = parser.Invoke(["--", "tail"]);
+
+        Assert.Same(command, invokedCommand);
+        Assert.Equal(0, parser.ExitCode);
+    }
+
     [Fact]
     public void NonMixedRestOptionReceivesEverythingAfterFirstArgument()
     {
         var restOption = new TestRestOption();
-        Command command = CreateCommand();
-        command.RestOption = restOption;
+        Command command = CreateCommand(restOption: restOption);
         CommandParser parser = CreateParser(command);
 
         Command? invokedCommand = parser.Invoke(["first", "--literal", "second"]);
@@ -197,9 +524,7 @@ public sealed class CommandParserTests
         {
             AllowMixed = true
         };
-        Command command = CreateCommand();
-        command.Options.Add(option);
-        command.RestOption = restOption;
+        Command command = CreateCommand(options: [option], restOption: restOption);
         CommandParser parser = CreateParser(command);
 
         Command? invokedCommand = parser.Invoke(["first", "--output", "result", "second"]);
@@ -216,8 +541,7 @@ public sealed class CommandParserTests
         {
             RequireDoubleDash = true
         };
-        Command command = CreateCommand();
-        command.RestOption = restOption;
+        Command command = CreateCommand(restOption: restOption);
         CommandParser parser = CreateParser(command);
 
         Command? invokedCommand = parser.Invoke(["--", "first", "--literal"]);
@@ -227,14 +551,29 @@ public sealed class CommandParserTests
     }
 
     [Fact]
+    public void TokensAfterDoubleDashRemainLiteralIncludingAnotherDoubleDash()
+    {
+        var restOption = new TestRestOption
+        {
+            RequireDoubleDash = true
+        };
+        Command command = CreateCommand(restOption: restOption);
+        CommandParser parser = CreateParser(command);
+
+        Command? invokedCommand = parser.Invoke(["--", "--", "-x"]);
+
+        Assert.Same(command, invokedCommand);
+        Assert.Equal(["--", "-x"], restOption.AssignedValues);
+    }
+
+    [Fact]
     public void DoubleDashRestOptionRejectsArgumentBeforeSeparator()
     {
         var restOption = new TestRestOption
         {
             RequireDoubleDash = true
         };
-        Command command = CreateCommand();
-        command.RestOption = restOption;
+        Command command = CreateCommand(restOption: restOption);
         CommandParser parser = CreateParser(command);
 
         Command? invokedCommand = parser.Invoke(["first"]);
@@ -259,8 +598,89 @@ public sealed class CommandParserTests
         Assert.Equal(0, parser.ExitCode);
     }
 
+    // TODO(CLI-005): Enable after help assignments are rejected by the parser.
+    /*
+        [Theory]
+        [InlineData("--help=")]
+        [InlineData("--help=value")]
+        [InlineData("-h=")]
+        [InlineData("-h=value")]
+        public void HelpOptionWithAssignedValueFailsInvocation(string helpOption)
+        {
+            int executionCount = 0;
+            Command command = CreateCommand(() => executionCount++);
+            CommandParser parser = CreateParser(command);
+
+            Command? invokedCommand = parser.Invoke([helpOption]);
+
+            Assert.Null(invokedCommand);
+            Assert.Equal(0, executionCount);
+            Assert.Equal(-1, parser.ExitCode);
+        }
+    */
+
     [Fact]
-    public void CommandWithoutExecutorCanSucceedWithoutPrintingHelp()
+    public void HelpOptionTargetsSelectedSubCommand()
+    {
+        int rootExecutionCount = 0;
+        int buildExecutionCount = 0;
+        Command build = CreateCommand(() => buildExecutionCount++, name: "build");
+        Command root = CreateCommand(
+            () => rootExecutionCount++,
+            subCommands: [build]);
+        CommandParser parser = CreateParser(root);
+
+        Command? invokedCommand = parser.Invoke(["build", "--help"]);
+
+        Assert.Null(invokedCommand);
+        Assert.Equal(0, rootExecutionCount);
+        Assert.Equal(0, buildExecutionCount);
+        Assert.Equal(0, parser.ExitCode);
+    }
+
+    [Fact]
+    public void ReusedParserResetsExitCodeBeforeFailure()
+    {
+        var project = new TestOption
+        {
+            Name = "project",
+            IsRequired = true
+        };
+        Command command = CreateCommand(() => 17, options: [project]);
+        CommandParser parser = CreateParser(command);
+
+        Command? firstInvocation = parser.Invoke(["--project=app"]);
+        Command? secondInvocation = parser.Invoke([]);
+
+        Assert.Same(command, firstInvocation);
+        Assert.Null(secondInvocation);
+        Assert.Equal(-1, parser.ExitCode);
+    }
+
+    [Fact]
+    public void ReusedParserSetsHelpCommandExitCodeToZero()
+    {
+        Command help = new()
+        {
+            Name = "help",
+            Help = "Print help.",
+            Usage = "incant help",
+            IsHelpCommand = true,
+            Execute = () => 99
+        };
+        Command root = CreateCommand(() => 23, subCommands: [help]);
+        CommandParser parser = CreateParser(root);
+
+        Command? firstInvocation = parser.Invoke([]);
+        Command? secondInvocation = parser.Invoke(["help"]);
+
+        Assert.Same(root, firstInvocation);
+        Assert.Same(help, secondInvocation);
+        Assert.Equal(0, parser.ExitCode);
+    }
+
+    [Fact]
+    public void CommandWithoutExecutorSucceedsWithZeroExitCode()
     {
         Command command = CreateCommand(execute: null);
         CommandParser parser = CreateParser(command);
@@ -268,22 +688,35 @@ public sealed class CommandParserTests
         Command? invokedCommand = parser.Invoke([]);
 
         Assert.Same(command, invokedCommand);
-        Assert.Equal(-1, parser.ExitCode);
+        Assert.Equal(0, parser.ExitCode);
     }
 
-    private static Command CreateCommand()
+    private static Command CreateCommand(
+        IReadOnlyList<IOption>? options = null,
+        IRestOption? restOption = null,
+        IReadOnlyList<Command>? subCommands = null)
     {
-        return CreateCommand(DefaultExecute);
+        return CreateCommand(DefaultExecute, options, restOption, subCommands);
     }
 
-    private static Command CreateCommand(Command.ExecuteDelegate? execute)
+    private static Command CreateCommand(
+        Command.ExecuteDelegate? execute,
+        IReadOnlyList<IOption>? options = null,
+        IRestOption? restOption = null,
+        IReadOnlyList<Command>? subCommands = null,
+        string name = "incant",
+        char? shortName = null)
     {
         return new Command
         {
-            Name = "incant",
+            Name = name,
+            ShortName = shortName,
             Help = "Build a project.",
             Usage = "incant [options]",
-            Execute = execute
+            Execute = execute,
+            Options = options ?? [],
+            RestOption = restOption,
+            SubCommands = subCommands ?? []
         };
     }
 
@@ -292,8 +725,7 @@ public sealed class CommandParserTests
         return new CommandParser
         {
             RootCommand = command,
-            Banner = "Incant",
-            PrintHelpWhenCommandHasNoExecutor = false
+            DefaultBanner = "Incant"
         };
     }
 
@@ -314,10 +746,7 @@ public sealed class CommandParserTests
         public List<string> AssignedValues { get; } = [];
         public int ToggleCount { get; private set; }
 
-        public string DumpTypeName()
-        {
-            return "string";
-        }
+        public string ValueTypeName => "string";
 
         public void Assign(ParseContext context, string value)
         {
@@ -333,6 +762,7 @@ public sealed class CommandParserTests
     private sealed class TestRestOption : IRestOption
     {
         public string Help { get; init; } = "Test rest option.";
+        public bool IsRequired { get; init; }
         public bool AllowMixed { get; init; }
         public bool RequireDoubleDash { get; init; }
         public List<string> AssignedValues { get; private set; } = [];
@@ -341,185 +771,5 @@ public sealed class CommandParserTests
         {
             AssignedValues = [.. values];
         }
-    }
-}
-
-public sealed class CommandTests
-{
-    [Fact]
-    public void CheckOptionsRejectsDuplicateLongNames()
-    {
-        Command command = CreateCommandWithOptions(
-            new TestOption("output", 'o'),
-            new TestOption("output", 'p'));
-
-        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(command.CheckOptions);
-
-        Assert.Contains("Duplicate option name", exception.Message);
-    }
-
-    [Fact]
-    public void CheckOptionsRejectsDuplicateShortNames()
-    {
-        Command command = CreateCommandWithOptions(
-            new TestOption("output", 'o'),
-            new TestOption("object", 'o'));
-
-        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(command.CheckOptions);
-
-        Assert.Contains("Duplicate short option name", exception.Message);
-    }
-
-    [Fact]
-    public void CheckSubCommandsRejectsDuplicateLongNames()
-    {
-        var command = new Command
-        {
-            SubCommands =
-            [
-                new Command { Name = "build", ShortName = 'b' },
-                new Command { Name = "build", ShortName = 'c' }
-            ]
-        };
-
-        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(command.CheckSubCommands);
-
-        Assert.Contains("Duplicate sub command name", exception.Message);
-    }
-
-    [Fact]
-    public void CheckSubCommandsRejectsDuplicateShortNames()
-    {
-        var command = new Command
-        {
-            SubCommands =
-            [
-                new Command { Name = "build", ShortName = 'b' },
-                new Command { Name = "bundle", ShortName = 'b' }
-            ]
-        };
-
-        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(command.CheckSubCommands);
-
-        Assert.Contains("Duplicate short sub command name", exception.Message);
-    }
-
-    [Fact]
-    public void WriteHelpIncludesConfiguredSectionsAndValues()
-    {
-        var command = new Command
-        {
-            Help = "Build a project.",
-            Usage = "incant build [options]",
-            SubCommands =
-            [
-                new Command
-                {
-                    Name = "clean",
-                    ShortName = 'c',
-                    Help = "Remove generated files."
-                }
-            ],
-            Options =
-            [
-                new TestOption("configuration", 'c')
-            ],
-            RestOption = new TestRestOption()
-        };
-        var writer = new Writer();
-
-        command.WriteHelp(writer, "Incant");
-
-        Assert.Contains("Incant", writer.Content);
-        Assert.Contains("Build a project.", writer.Content);
-        Assert.Contains("Usage:", writer.Content);
-        Assert.Contains("incant build [options]", writer.Content);
-        Assert.Contains("Sub Commands:", writer.Content);
-        Assert.Contains("clean", writer.Content);
-        Assert.Contains("Options:", writer.Content);
-        Assert.Contains("configuration", writer.Content);
-        Assert.Contains("Rest Options:", writer.Content);
-    }
-
-    private static Command CreateCommandWithOptions(params IOption[] options)
-    {
-        return new Command
-        {
-            Options = [.. options]
-        };
-    }
-
-    private sealed class TestOption(string name, char? shortName) : IOption
-    {
-        public string Name { get; } = name;
-        public char? ShortName { get; } = shortName;
-        public string Help => "Test option.";
-        public bool IsRequired => false;
-        public IEnumerable<string>? Selections => null;
-        public bool IsToggle => false;
-        public string DefaultValue => "debug";
-
-        public string DumpTypeName()
-        {
-            return "string";
-        }
-
-        public void Assign(ParseContext context, string value)
-        {
-        }
-
-        public void Toggle(ParseContext context)
-        {
-        }
-    }
-
-    private sealed class TestRestOption : IRestOption
-    {
-        public string Help => "Remaining project arguments.";
-        public bool AllowMixed => false;
-        public bool RequireDoubleDash => false;
-
-        public void Assign(ParseContext context, List<string> values)
-        {
-        }
-    }
-}
-
-public sealed class ParseContextTests
-{
-    [Fact]
-    public void DiagnosticsSetFlagsAndAppendStyledMessages()
-    {
-        var context = new ParseContext
-        {
-            Tokens = new TokenList(Array.Empty<string>())
-        };
-
-        context.Warning("warning message");
-        context.Error("error message");
-
-        Assert.True(context.AnyWarning);
-        Assert.True(context.AnyError);
-        Assert.Contains("Warning:", context.Writer.Content);
-        Assert.Contains("warning message", context.Writer.Content);
-        Assert.Contains("Error:", context.Writer.Content);
-        Assert.Contains("error message", context.Writer.Content);
-    }
-
-    [Fact]
-    public void StoreCommandTokensSnapshotsUnusedTokensOnlyOnce()
-    {
-        var context = new ParseContext
-        {
-            Tokens = new TokenList(["matched", "unused"])
-        };
-        context.Tokens.Match();
-
-        context.StoreCommandTokens();
-        context.Tokens.Match();
-        context.StoreCommandTokens();
-
-        Assert.NotNull(context.CommandTokens);
-        Assert.Equal(["unused"], context.CommandTokens.AllTokens.Select(token => token.Raw));
     }
 }

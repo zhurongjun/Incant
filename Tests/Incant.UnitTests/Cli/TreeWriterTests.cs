@@ -26,6 +26,36 @@ public sealed class TreeWriterTests
     }
 
     [Fact]
+    public void WriteAndEndLineCombineTextIntoOneNode()
+    {
+        var writer = new TreeWriter();
+
+        writer.Write("first").Write(" second").EndLine();
+
+        Assert.Equal($"`-first second{Environment.NewLine}", writer.Build());
+    }
+
+    [Fact]
+    public void ParameterlessWriteLineCreatesAnEmptyNode()
+    {
+        var writer = new TreeWriter();
+
+        writer.WriteLine();
+
+        Assert.Equal($"`-{Environment.NewLine}", writer.Build());
+    }
+
+    [Fact]
+    public void EndingAtLineStartDoesNotCreateANode()
+    {
+        var writer = new TreeWriter();
+
+        writer.EndLine().EndLine();
+
+        Assert.Equal(string.Empty, writer.Build());
+    }
+
+    [Fact]
     public void IndentScopeRendersNestedNodesAndRestoresParentIndent()
     {
         var writer = new TreeWriter();
@@ -45,6 +75,27 @@ public sealed class TreeWriterTests
                 + $"| `-last child{Environment.NewLine}"
                 + $"`-next root{Environment.NewLine}",
             result);
+    }
+
+    [Fact]
+    public void NestedScopesRenderEveryIndentLevel()
+    {
+        var writer = new TreeWriter();
+        writer.WriteLine("root");
+        using (writer.IndentScope())
+        {
+            writer.WriteLine("child");
+            using (writer.IndentScope())
+            {
+                writer.WriteLine("grandchild");
+            }
+        }
+
+        Assert.Equal(
+            $"`-root{Environment.NewLine}"
+                + $"  `-child{Environment.NewLine}"
+                + $"    `-grandchild{Environment.NewLine}",
+            writer.Build());
     }
 
     [Fact]
@@ -69,6 +120,33 @@ public sealed class TreeWriterTests
         string result = writer.BuildWithoutSolvingIndent();
 
         Assert.Equal($"`-node{Environment.NewLine}", result);
+    }
+
+    [Fact]
+    public void BuildIsRepeatableAndIncludesLinesAddedAfterward()
+    {
+        var writer = new TreeWriter();
+        writer.WriteLine("first");
+
+        string firstBuild = writer.Build();
+        string secondBuild = writer.Build();
+        writer.WriteLine("second");
+        string thirdBuild = writer.Build();
+
+        Assert.Equal($"`-first{Environment.NewLine}", firstBuild);
+        Assert.Equal(firstBuild, secondBuild);
+        Assert.Equal($"|-first{Environment.NewLine}`-second{Environment.NewLine}", thirdBuild);
+    }
+
+    [Fact]
+    public void BuildWithoutSolvingRejectsLinesAddedAfterPreviousSolve()
+    {
+        var writer = new TreeWriter();
+        writer.WriteLine("first");
+        writer.SolveIndent();
+        writer.WriteLine("second");
+
+        Assert.Throws<InvalidOperationException>(() => writer.BuildWithoutSolvingIndent());
     }
 
     [Fact]

@@ -36,10 +36,13 @@ public class SourcePrinter
         int lineStart = 0;
         while (lineStart < text.Length)
         {
-            int lineEnd = text.IndexOf('\n', lineStart);
-            if (lineEnd < 0)
+            int lineFeedIndex = text.IndexOf('\n', lineStart);
+            int lineEnd = lineFeedIndex < 0 ? text.Length : lineFeedIndex;
+            if (lineFeedIndex >= 0
+                && lineEnd > lineStart
+                && text[lineEnd - 1] == '\r')
             {
-                lineEnd = text.Length;
+                --lineEnd;
             }
 
             _lines.Add(new SourceLineData
@@ -48,7 +51,12 @@ public class SourcePrinter
                 End = lineEnd
             });
 
-            lineStart = lineEnd + 1;
+            if (lineFeedIndex < 0)
+            {
+                break;
+            }
+
+            lineStart = lineFeedIndex + 1;
         }
 
         _maxLineNumberWidth = _lines.Count.ToString().Length;
@@ -72,7 +80,8 @@ public class SourcePrinter
         for (int i = 0; i < _lines.Count; i++)
         {
             SourceLineData lineData = _lines[i];
-            if (sourcePosition >= lineData.Start && sourcePosition <= lineData.End)
+            int lineBoundaryEnd = GetLineBoundaryEnd(i);
+            if (sourcePosition >= lineData.Start && sourcePosition <= lineBoundaryEnd)
             {
                 return i;
             }
@@ -140,14 +149,25 @@ public class SourcePrinter
             PrintLine(writer, lineIndex, withLineNumber);
 
             SourceLineData lineData = _lines[lineIndex];
-            int indicatorStartColumn = int.Max(0, start - lineData.Start);
-            int indicatorEndColumn = int.Min(lineData.Length, end - lineData.Start);
-            int indicatorLength = indicatorEndColumn - indicatorStartColumn;
+            int indicatorStartColumn = int.Clamp(start - lineData.Start, 0, lineData.Length);
+            int indicatorEndColumn = int.Clamp(end - lineData.Start, 0, lineData.Length);
+            int indicatorLength = int.Max(0, indicatorEndColumn - indicatorStartColumn);
             PrintIndicator(writer, indicatorStartColumn, indicatorLength, withLineNumber);
         }
 
         int previewEndLine = Math.Min(_lines.Count - 1, endLine + previewLineCount);
         PrintLines(writer, endLine + 1, previewEndLine - endLine, withLineNumber);
+    }
+
+    private int GetLineBoundaryEnd(int lineIndex)
+    {
+        if (lineIndex + 1 < _lines.Count)
+        {
+            return _lines[lineIndex + 1].Start - 1;
+        }
+
+        bool hasTrailingLineFeed = _text.Length != 0 && _text[^1] == '\n';
+        return hasTrailingLineFeed ? _text.Length - 1 : _text.Length;
     }
 
     private void PrintLineNumber(Writer writer, int lineNumber)
