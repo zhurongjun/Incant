@@ -1,5 +1,10 @@
 <Solution>
-  <Project Path="Incant/Incant.csproj" />
+  <Folder Name="/Source/">
+    <Project Path="Source/Incant/Incant.csproj" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="Tests/Incant.UnitTests/Incant.UnitTests.csproj" />
+  </Folder>
   <Folder Name="/Legacy/">
     <Project Path="Legacy/SB/SB.csproj" />
     <Project Path="Legacy/SB/SB.Base/SB.Base.csproj" />
