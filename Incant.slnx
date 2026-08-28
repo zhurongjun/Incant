@@ -3,6 +3,12 @@
     <Project Path="Source/Incant.Base/Incant.Base.csproj" />
     <Project Path="Source/Incant/Incant.csproj" />
   </Folder>
+  <Folder Name="/Benchmark/">
+    <Project Path="Benchmark/Incant.Benchmarks/Incant.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/Samples/">
+    <Project Path="Samples/Incant.Trace.Sample/Incant.Trace.Sample.csproj" />
+  </Folder>
   <Folder Name="/Tests/">
     <Project Path="Tests/Incant.UnitTests/Incant.UnitTests.csproj" />
   </Folder>
