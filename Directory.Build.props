@@ -2,6 +2,8 @@
   <PropertyGroup>
     <UseArtifactsOutput>true</UseArtifactsOutput>
     <ArtifactsPath>$(MSBuildThisFileDirectory)build</ArtifactsPath>
+    <TestResultsPath Condition="'$(TestResultsPath)' == ''">$(ArtifactsPath)/TestResults</TestResultsPath>
+    <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --results-directory &quot;$(TestResultsPath)&quot;</TestingPlatformCommandLineArguments>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
   </PropertyGroup>
 </Project>
