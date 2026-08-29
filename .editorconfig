@@ -109,7 +109,7 @@ csharp_style_inlined_variable_declaration = true:suggestion
 csharp_style_throw_expression = true:suggestion
 csharp_style_conditional_delegate_call = true:suggestion
 
-# Naming violations are build warnings for non-Legacy projects.
+# Naming violations are build warnings.
 dotnet_diagnostic.IDE1006.severity = warning
 
 # Shared naming styles.

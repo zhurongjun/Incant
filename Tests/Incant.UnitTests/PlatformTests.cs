@@ -7,7 +7,7 @@ namespace Incant.UnitTests;
 public sealed class PlatformTests
 {
     [Fact]
-    public void OSValuesPreserveLegacyOrdering()
+    public void OSValuesUseStableOrdering()
     {
         Assert.Equal(0, (int)PlatformOS.Unknown);
         Assert.Equal(1, (int)PlatformOS.Windows);
@@ -16,7 +16,7 @@ public sealed class PlatformTests
     }
 
     [Fact]
-    public void ArchValuesPreserveLegacyOrdering()
+    public void ArchValuesUseStableOrdering()
     {
         Assert.Equal(0, (int)PlatformArch.Unknown);
         Assert.Equal(1, (int)PlatformArch.X86);

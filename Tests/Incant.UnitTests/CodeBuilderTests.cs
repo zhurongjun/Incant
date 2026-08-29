@@ -57,7 +57,7 @@ public sealed class CodeBuilderTests
     }
 
     [Fact]
-    public void PushIndentPreservesLegacySingleLevelBehavior()
+    public void PushIndentAlwaysEntersOneLevel()
     {
         var builder = new CodeBuilder
         {
@@ -223,7 +223,7 @@ public sealed class CodeBuilderTests
     }
 
     [Fact]
-    public void WriteGenerateNotePreservesTheLegacyBannerWithCSharpOptions()
+    public void WriteGenerateNoteUsesTheCSharpBannerLayout()
     {
         var builder = new CodeBuilder();
 

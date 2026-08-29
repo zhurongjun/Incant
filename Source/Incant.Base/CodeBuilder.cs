@@ -149,8 +149,7 @@ public class CodeBuilder
 
     /// <summary>Enters one indentation level.</summary>
     /// <param name="levels">
-    /// Retained from the legacy API; the legacy behavior enters exactly one level regardless of
-    /// the supplied value.
+    /// Retained for API compatibility; this method enters exactly one level regardless of the supplied value.
     /// </param>
     public void PushIndent(uint levels = 1)
     {

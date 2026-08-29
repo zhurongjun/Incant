@@ -2,7 +2,7 @@
 
 ## 适用范围
 
-本规范适用于仓库内所有人工维护的 C# 代码，包括 `Incant` 与 `Legacy`。`Legacy` 的构建期代码风格检查虽然被豁免，但修改其中的代码时仍须遵守本规范。
+本规范适用于仓库内所有人工维护的 C# 代码。
 
 本规范以微软的通用 C# 编码约定、.NET Runtime 编码风格和仓库根目录的 `.editorconfig` 为依据：
 
@@ -164,7 +164,7 @@ TargetResult result = graph.Build(target);
 人工逐段验收后，还必须：
 
 - 查看完整 C# 差异，确认没有遗漏的代码段。
-- 对受影响的非 Legacy 项目运行 `dotnet format <项目> --verify-no-changes --no-restore`。
+- 对受影响的项目运行 `dotnet format <项目> --verify-no-changes --no-restore`。
 - 构建受影响的项目；条件允许时构建 `Incant.slnx`。
 - 运行与改动相关的测试或可执行验证。
 - 如果某项检查无法运行或存在规范例外，必须在最终说明中明确列出，不能声称已完全验收。

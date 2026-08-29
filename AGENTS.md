@@ -3,14 +3,13 @@
 ## 项目说明
 - 本项目致力于建立一个现代且易用的 C++ 构建系统，基于 C#
 
-## Legacy 目录
-- `Legacy` 仅作为历史代码参考来源，禁止对其中的文件或项目配置进行修改
-- `Legacy` 不得依赖 `Source`、`Tests` 或其他正式维护的实体项目
-- 需要复用 `Legacy` 中的实现时，应将所需代码复制到正式模块中，并在正式模块内独立整理、测试和维护
+## SB 参考实现
+- 原始 SB 实现位于 `D:\workspace\project\ExtremeEngine\engine\tools\SB`，仅作为仓库外部的实现参考
+- 默认不得在 Incant 任务中修改该外部目录；需要复用其中实现时，应将所需逻辑迁移到正式模块中，并在正式模块内独立整理、测试和维护
 
 ## C# 编码规范
 - 新增或修改任何 C# 代码前，必须完整阅读 `AgentWiki/CSharpCodingStyle.md`，并按该文档规划命名、结构和实现风格
-- `AgentWiki/CSharpCodingStyle.md` 适用于仓库内所有人工维护的 C# 代码；`Legacy` 的构建期风格检查豁免不代表编码规范豁免
+- `AgentWiki/CSharpCodingStyle.md` 适用于仓库内所有人工维护的 C# 代码
 - `.editorconfig` 负责自动执行可表达的格式和命名规则，但不能替代对语义、可读性和特殊情况的人工检查
 - 任务完成并退出验收前，必须查看完整 C# 差异，并按照 `AgentWiki/CSharpCodingStyle.md` 的“退出验收”章节，对每个 diff 区块及其中每个新增或修改的类型、成员和独立逻辑块逐段检查
 - 发现风格问题必须在退出前修正；格式化、分析器、构建或测试成功不能替代逐段人工验收
