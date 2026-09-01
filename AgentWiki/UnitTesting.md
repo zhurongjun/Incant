@@ -2,7 +2,7 @@
 
 ## 定位
 
-- 单元测试集中在 `Tests` 目录，项目使用 `*.UnitTests` 命名。
+- 单元测试集中在 `Tests` 目录，项目使用 `*.UnitTest.*` 命名。
 - 测试框架统一使用 xUnit v3，测试平台统一使用 Microsoft Testing Platform。
 - 基础设施冒烟测试只证明测试发现和执行链路有效，不计入功能覆盖。
 
@@ -28,18 +28,18 @@
 
 ```shell
 # 单个测试方法：开发和排查时的默认起点
-dotnet test Tests/Incant.UnitTests/Incant.UnitTests.csproj -- --filter-method Incant.UnitTests.Cli.WriterTests.NewWriterIsEmpty
+dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj -- --filter-method Incant.UnitTest.Base.Cli.WriterTests.NewWriterIsEmpty
 
 # 单个测试类：同一行为涉及多个测试时使用
-dotnet test Tests/Incant.UnitTests/Incant.UnitTests.csproj -- --filter-class Incant.UnitTests.Cli.WriterTests
+dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj -- --filter-class Incant.UnitTest.Base.Cli.WriterTests
 
 # 单个测试项目：修改影响整个测试项目时使用
-dotnet test Tests/Incant.UnitTests/Incant.UnitTests.csproj
+dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj
 
 # CI 或退出验收：显式还原、Release 构建并运行测试
-dotnet restore Tests/Incant.UnitTests/Incant.UnitTests.csproj
-dotnet build Tests/Incant.UnitTests/Incant.UnitTests.csproj --configuration Release --no-restore
-dotnet test Tests/Incant.UnitTests/Incant.UnitTests.csproj --configuration Release --no-build --minimum-expected-tests 1
+dotnet restore Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj
+dotnet build Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configuration Release --no-restore
+dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configuration Release --no-build --minimum-expected-tests 1
 ```
 
 - `--` 之后是 Microsoft Testing Platform 和 xUnit 的参数；类名和方法名使用完全限定名。

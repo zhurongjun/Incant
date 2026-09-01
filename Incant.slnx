@@ -4,7 +4,8 @@
     <Project Path="Source/Incant/Incant.csproj" />
   </Folder>
   <Folder Name="/Benchmark/">
-    <Project Path="Benchmark/Incant.Benchmarks/Incant.Benchmarks.csproj" />
+    <Project Path="Benchmark/Incant.Bench.Log/Incant.Bench.Log.csproj" />
+    <Project Path="Benchmark/Incant.Bench.Trace/Incant.Bench.Trace.csproj" />
   </Folder>
   <Folder Name="/Samples/">
     <Project Path="Samples/Incant.Log.Sample/Incant.Log.Sample.csproj" />
@@ -12,6 +13,6 @@
   </Folder>
   <Folder Name="/Tests/">
     <Project Path="Tests/Incant.ProcessTestHelper/Incant.ProcessTestHelper.csproj" />
-    <Project Path="Tests/Incant.UnitTests/Incant.UnitTests.csproj" />
+    <Project Path="Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj" />
   </Folder>
 </Solution>

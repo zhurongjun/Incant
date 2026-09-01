@@ -51,5 +51,10 @@ Desktop.ini
 *.swp
 *~
 
+# Source directories that resemble ignored file extensions
+!Benchmark/Incant.Bench.Log/
+!Benchmark/Incant.Bench.Log/*.cs
+!Benchmark/Incant.Bench.Log/*.csproj
+
 # Vscode
 .VSCodeCounter
