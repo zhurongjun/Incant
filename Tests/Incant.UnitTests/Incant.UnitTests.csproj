@@ -19,5 +19,6 @@
   <ItemGroup>
     <ProjectReference Include="../../Source/Incant.Base/Incant.Base.csproj" />
     <ProjectReference Include="../../Source/Incant/Incant.csproj" />
+    <ProjectReference Include="../Incant.ProcessTestHelper/Incant.ProcessTestHelper.csproj" />
   </ItemGroup>
 </Project>

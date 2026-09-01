@@ -11,6 +11,7 @@
     <Project Path="Samples/Incant.Trace.Sample/Incant.Trace.Sample.csproj" />
   </Folder>
   <Folder Name="/Tests/">
+    <Project Path="Tests/Incant.ProcessTestHelper/Incant.ProcessTestHelper.csproj" />
     <Project Path="Tests/Incant.UnitTests/Incant.UnitTests.csproj" />
   </Folder>
 </Solution>
