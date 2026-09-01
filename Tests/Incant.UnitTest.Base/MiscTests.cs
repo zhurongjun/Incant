@@ -129,8 +129,10 @@ public sealed class MiscTests
         Assert.True(result.Elapsed >= TimeSpan.Zero);
     }
 
-    [Fact]
-    public void RawArgumentsRoundTripThroughTheQuotingHelpers()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RawProcessEntryPointsRoundTripThroughTheQuotingHelpers(bool runAsynchronously)
     {
         string[] expectedArguments =
         [
@@ -145,10 +147,15 @@ public sealed class MiscTests
         string[] helperArguments = ProcessTestHost.CreateArguments("arguments", expectedArguments);
         string rawArguments = string.Join(" ", helperArguments.Select(Misc.QuoteCommandLineArgument));
 
-        ProcessResult result = Misc.RunProcessRaw(
-            ProcessTestHost.DotnetHostPath,
-            rawArguments,
-            cancellationToken: TestContext.Current.CancellationToken);
+        ProcessResult result = runAsynchronously
+            ? await Misc.RunProcessRawAsync(
+                ProcessTestHost.DotnetHostPath,
+                rawArguments,
+                cancellationToken: TestContext.Current.CancellationToken)
+            : Misc.RunProcessRaw(
+                ProcessTestHost.DotnetHostPath,
+                rawArguments,
+                cancellationToken: TestContext.Current.CancellationToken);
         string[]? actualArguments = JsonSerializer.Deserialize<string[]>(result.StandardOutput);
 
         Assert.Equal(expectedArguments, actualArguments);
@@ -179,6 +186,8 @@ public sealed class MiscTests
         using var directory = new TemporaryDirectory();
         string assignedName = "INCANT_MISC_ASSIGNED_" + Guid.NewGuid().ToString("N");
         string removedName = "INCANT_MISC_REMOVED_" + Guid.NewGuid().ToString("N");
+        string workingDirectoryMarkerName = "working-directory-" + Guid.NewGuid().ToString("N") + ".marker";
+        string fallbackMarkerPath = Path.GetFullPath(workingDirectoryMarkerName);
         Environment.SetEnvironmentVariable(removedName, "parent-value");
 
         try
@@ -195,7 +204,7 @@ public sealed class MiscTests
 
             ProcessResult workingDirectoryResult = await Misc.RunProcessAsync(
                 ProcessTestHost.DotnetHostPath,
-                ProcessTestHost.CreateArguments("working-directory"),
+                ProcessTestHost.CreateArguments("touch", workingDirectoryMarkerName),
                 options,
                 TestContext.Current.CancellationToken);
             ProcessResult assignedResult = await Misc.RunProcessAsync(
@@ -209,13 +218,15 @@ public sealed class MiscTests
                 options,
                 TestContext.Current.CancellationToken);
 
-            Assert.Equal(Path.GetFullPath(directory.Path), Path.GetFullPath(workingDirectoryResult.StandardOutput));
+            Assert.True(workingDirectoryResult.IsSuccess);
+            Assert.True(File.Exists(Path.Combine(directory.Path, workingDirectoryMarkerName)));
             Assert.Equal("child-value", JsonSerializer.Deserialize<string>(assignedResult.StandardOutput));
             Assert.Equal("null", removedResult.StandardOutput);
         }
         finally
         {
             Environment.SetEnvironmentVariable(removedName, null);
+            File.Delete(fallbackMarkerPath);
         }
     }
 

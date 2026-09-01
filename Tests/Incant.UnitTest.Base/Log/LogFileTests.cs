@@ -238,6 +238,24 @@ public sealed class LogFileTests : LogTestBase
         Assert.False(reader.WasDisposed);
     }
 
+    [Fact]
+    public async Task AsyncReaderHonorsCancellationWithoutDisposingCallerOwnedReader()
+    {
+        using var reader = new TrackingStringReader(ValidRecord);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () =>
+            {
+                await foreach (LogFileRecord _ in LogFileReader.ReadAsync(reader, cancellation.Token))
+                {
+                }
+            });
+
+        Assert.False(reader.WasDisposed);
+    }
+
     public static TheoryData<string> InvalidRecords => new()
     {
         ValidRecord.Replace("@1 ", "@2 ", StringComparison.Ordinal),

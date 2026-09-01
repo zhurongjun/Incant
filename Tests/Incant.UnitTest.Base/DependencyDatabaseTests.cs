@@ -65,6 +65,21 @@ public sealed class DependencyDatabaseTests
             () => new DependencyDatabase((IDependencyDatabaseBackend)null!));
     }
 
+    [Fact]
+    public void CsvFactoryRejectsInvalidStorageCoordinates()
+    {
+        using var temporaryDirectory = new TemporaryDirectory();
+
+        Assert.Throws<ArgumentNullException>(
+            () => DependencyDatabase.CreateCSV(null!, DatabaseName));
+        Assert.Throws<ArgumentException>(
+            () => DependencyDatabase.CreateCSV(string.Empty, DatabaseName));
+        Assert.Throws<ArgumentNullException>(
+            () => DependencyDatabase.CreateCSV(temporaryDirectory.Path, null!));
+        Assert.Throws<ArgumentException>(
+            () => DependencyDatabase.CreateCSV(temporaryDirectory.Path, "invalid/name"));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

@@ -87,29 +87,3 @@ internal sealed class CollectingLogSink : ILogSink
         IsDisposed = true;
     }
 }
-
-internal sealed class NullLogSink : ILogSink
-{
-    internal NullLogSink(LogLevel minimumLevel = LogLevel.Trace)
-    {
-        MinimumLevel = minimumLevel;
-    }
-
-    public LogLevel MinimumLevel { get; }
-
-    public void Start(LogSinkContext context)
-    {
-    }
-
-    public void Emit(RenderedLogEvent logEvent)
-    {
-    }
-
-    public void Flush()
-    {
-    }
-
-    public void Dispose()
-    {
-    }
-}

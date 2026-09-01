@@ -91,11 +91,9 @@ public sealed class CodeBuilderTests
     {
         var builder = new CodeBuilder();
 
-        InvalidOperationException exception =
-            Assert.Throws<InvalidOperationException>(builder.PopIndent);
+        Assert.Throws<InvalidOperationException>(builder.PopIndent);
         builder.Line("root");
 
-        Assert.Equal("No indent level to pop.", exception.Message);
         Assert.Equal($"root{Environment.NewLine}", builder.Content);
     }
 

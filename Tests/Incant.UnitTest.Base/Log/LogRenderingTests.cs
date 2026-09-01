@@ -30,6 +30,35 @@ public sealed class LogRenderingTests : LogTestBase
     }
 
     [Fact]
+    public void EveryLevelUsesItsDeclaredLevelAndDefaultCategory()
+    {
+        var sink = Start();
+
+        LogRecorder.Trace("trace");
+        LogRecorder.Debug("debug");
+        LogRecorder.Info("info");
+        LogRecorder.Warning("warning");
+        LogRecorder.Error("error");
+        LogRecorder.Fatal("fatal");
+        LogRecorder.Stop();
+
+        Assert.Equal(
+            [
+                LogLevel.Trace,
+                LogLevel.Debug,
+                LogLevel.Info,
+                LogLevel.Warning,
+                LogLevel.Error,
+                LogLevel.Fatal,
+            ],
+            sink.Events.Select(logEvent => logEvent.Level));
+        Assert.All(sink.Events, logEvent => Assert.Equal(LogCategory.General, logEvent.Category));
+        Assert.Equal(
+            ["trace", "debug", "info", "warning", "error", "fatal"],
+            sink.Events.Select(logEvent => logEvent.Message));
+    }
+
+    [Fact]
     public void EscapingAlignmentFormattingAndDuplicateNamesUseInvariantRules()
     {
         CultureInfo previousCulture = CultureInfo.CurrentCulture;

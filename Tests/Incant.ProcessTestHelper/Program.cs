@@ -35,10 +35,6 @@ internal static class Program
                 Console.Out.Write(JsonSerializer.Serialize(Environment.GetEnvironmentVariable(arguments[1])));
                 return 0;
 
-            case "working-directory":
-                Console.Out.Write(Environment.CurrentDirectory);
-                return 0;
-
             case "exit":
                 return int.Parse(arguments[1], CultureInfo.InvariantCulture);
 

@@ -42,13 +42,14 @@ public sealed class CommandParserTests
     [Fact]
     public void ExecutorExceptionPropagatesAndLeavesFailureExitCode()
     {
-        Command command = CreateCommand(() => throw new InvalidOperationException("execution failed"));
+        var expectedException = new InvalidOperationException("execution failed");
+        Command command = CreateCommand(() => throw expectedException);
         CommandParser parser = CreateParser(command);
 
         InvalidOperationException exception =
             Assert.Throws<InvalidOperationException>(() => parser.Invoke([]));
 
-        Assert.Equal("execution failed", exception.Message);
+        Assert.Same(expectedException, exception);
         Assert.Equal(-1, parser.ExitCode);
     }
 
