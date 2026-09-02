@@ -69,11 +69,26 @@ public sealed partial class LlvmDiscoveryProvider : IDiscoveryProvider
         DiscoveryContext context,
         CancellationToken cancellationToken)
     {
-        string compiler = candidate.Path;
-        string? cppCompiler = FindRelatedExecutable(compiler, "clang++", "clang-cl");
-        string? archiver = FindRelatedExecutable(compiler, "llvm-ar");
-        string? linker = FindRelatedExecutable(compiler, "ld.lld", "lld-link", "wasm-ld");
-        if (!File.Exists(compiler) || cppCompiler is null || archiver is null || linker is null)
+        string? compiler = FindPrimaryCompiler(candidate.Path);
+        if (compiler is null)
+        {
+            return null;
+        }
+
+        string? cppCompiler = FindRelatedExecutable(compiler, "clang++");
+        if (cppCompiler is null && context.HostOS == PlatformOS.Windows)
+        {
+            cppCompiler = compiler;
+        }
+
+        string? archiver = FindRelatedExecutable(compiler, "llvm-ar", "llvm-lib");
+        string? linker = FindRelatedExecutable(
+            compiler,
+            "ld.lld",
+            "lld-link",
+            "wasm-ld",
+            "lld");
+        if (cppCompiler is null || archiver is null || linker is null)
         {
             return null;
         }
@@ -108,7 +123,7 @@ public sealed partial class LlvmDiscoveryProvider : IDiscoveryProvider
         string? targetTriple = targetResult?.StandardOutput.Trim();
         if (string.IsNullOrWhiteSpace(targetTriple))
         {
-            targetTriple = versionResult.StandardOutput
+            targetTriple = versionText
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
                 .Select(line => line.Trim())
                 .FirstOrDefault(line => line.StartsWith("Target:", StringComparison.OrdinalIgnoreCase))
@@ -122,13 +137,7 @@ public sealed partial class LlvmDiscoveryProvider : IDiscoveryProvider
         }
 
         TargetArchitecture architecture = ProviderUtilities.ParseArchitecture(targetTriple);
-        TargetPlatform platform = context.HostOS switch
-        {
-            PlatformOS.Windows => TargetPlatform.Windows,
-            PlatformOS.Linux => TargetPlatform.Linux,
-            PlatformOS.OSX => TargetPlatform.MacOS,
-            _ => TargetPlatform.Unknown,
-        };
+        TargetPlatform platform = ParseTargetPlatform(targetTriple);
         var components = new List<Component>
         {
             new(ComponentKind.Compiler, compiler, context.HostArchitecture, architecture),
@@ -136,6 +145,16 @@ public sealed partial class LlvmDiscoveryProvider : IDiscoveryProvider
             new(ComponentKind.Archiver, archiver, context.HostArchitecture, architecture),
             new(ComponentKind.Linker, linker, context.HostArchitecture, architecture),
         };
+        string? clangClCompiler = FindRelatedExecutable(compiler, "clang-cl");
+        if (clangClCompiler is not null)
+        {
+            components.Add(new Component(
+                ComponentKind.Compiler,
+                clangClCompiler,
+                context.HostArchitecture,
+                architecture));
+        }
+
         string? resourceDirectory = resourceResult?.StandardOutput.Trim();
         if (!string.IsNullOrWhiteSpace(resourceDirectory) && Directory.Exists(resourceDirectory))
         {
@@ -237,6 +256,38 @@ public sealed partial class LlvmDiscoveryProvider : IDiscoveryProvider
             Path.GetDirectoryName(cppCompiler)!,
             compilerName + extension);
         return File.Exists(compiler) ? compiler : null;
+    }
+
+    private static string? FindPrimaryCompiler(string candidate)
+    {
+        string fileName = Path.GetFileNameWithoutExtension(candidate);
+        if (fileName.Equals("clang-cl", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("clang-cl-", StringComparison.OrdinalIgnoreCase))
+        {
+            // Keep clang-cl discoverable without making the MSVC-compatible driver the primary C compiler.
+            return FindRelatedExecutable(candidate, "clang");
+        }
+
+        return File.Exists(candidate) ? candidate : null;
+    }
+
+    private static TargetPlatform ParseTargetPlatform(string targetTriple)
+    {
+        if (targetTriple.Contains("windows", StringComparison.OrdinalIgnoreCase)
+            && targetTriple.Contains("msvc", StringComparison.OrdinalIgnoreCase))
+        {
+            return TargetPlatform.Windows;
+        }
+
+        if (targetTriple.Contains("darwin", StringComparison.OrdinalIgnoreCase))
+        {
+            return TargetPlatform.MacOS;
+        }
+
+        return targetTriple.Contains("linux", StringComparison.OrdinalIgnoreCase)
+            && !targetTriple.Contains("android", StringComparison.OrdinalIgnoreCase)
+            ? TargetPlatform.Linux
+            : TargetPlatform.Unknown;
     }
 
     private static void AddCompilerCandidates(

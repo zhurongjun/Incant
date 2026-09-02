@@ -372,12 +372,32 @@ jobs:
       - name: Install and verify Android NDK
         shell: pwsh
         run: |
-          & sdkmanager --install 'ndk;${{ matrix.ndk }}'
+          $androidSdkRoot = @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT) |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } |
+              Select-Object -First 1
+          if (-not $androidSdkRoot) {
+              throw 'The Android SDK root was not found.'
+          }
+
+          $sdkManagerName = if ($IsWindows) { 'sdkmanager.bat' } else { 'sdkmanager' }
+          $sdkManager = Join-Path $androidSdkRoot "cmdline-tools/latest/bin/$sdkManagerName"
+          if (-not (Test-Path -LiteralPath $sdkManager -PathType Leaf)) {
+              $commandLineToolsRoot = Join-Path $androidSdkRoot 'cmdline-tools'
+              $sdkManager = Get-ChildItem -LiteralPath $commandLineToolsRoot -Filter $sdkManagerName -File -Recurse -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Directory.Name -eq 'bin' } |
+                  Select-Object -ExpandProperty FullName -First 1
+          }
+
+          if (-not $sdkManager) {
+              throw "sdkmanager was not found under '$androidSdkRoot'."
+          }
+
+          & $sdkManager --install 'ndk;${{ matrix.ndk }}'
           if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
           }
 
-          $ndkRoot = Join-Path $env:ANDROID_HOME 'ndk/${{ matrix.ndk }}'
+          $ndkRoot = Join-Path $androidSdkRoot 'ndk/${{ matrix.ndk }}'
           $env:ANDROID_NDK_HOME = $ndkRoot
           $env:ANDROID_NDK_ROOT = $ndkRoot
 
