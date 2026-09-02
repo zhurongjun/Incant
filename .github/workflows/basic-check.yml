@@ -1,12 +1,12 @@
-name: check
+name: basic-check
 
 on:
   push:
     branches:
-      - main
+      - '**'
   pull_request:
     branches:
-      - main
+      - '**'
   workflow_dispatch:
   workflow_call:
 
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: check-${{ github.workflow }}-${{ github.ref }}
+  group: basic-check-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -50,16 +50,25 @@ jobs:
       - name: Restore
         run: |
           dotnet restore Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj
+          dotnet restore Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj
           dotnet restore Source/Incant/Incant.csproj
 
       - name: Build
         run: |
           dotnet build Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configuration Release --no-restore
+          dotnet build Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj --configuration Release --no-restore
           dotnet build Source/Incant/Incant.csproj --configuration Release --no-restore
 
-      - name: Test
+      - name: Test Base
         run: >-
           dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj
+          --configuration Release
+          --no-build
+          --minimum-expected-tests 1
+
+      - name: Test Core
+        run: >-
+          dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj
           --configuration Release
           --no-build
           --minimum-expected-tests 1

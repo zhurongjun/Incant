@@ -5,6 +5,8 @@
 - 单元测试集中在 `Tests` 目录，项目使用 `*.UnitTest.*` 命名。
 - 测试框架统一使用 xUnit v3，测试平台统一使用 Microsoft Testing Platform。
 - 基础设施冒烟测试只证明测试发现和执行链路有效，不计入功能覆盖。
+- `Incant.UnitTest.Base` 覆盖底层基础设施，`Incant.UnitTest.Core` 覆盖构建系统核心的确定性行为。
+- 依赖真实机器部署的工具链发现由 `Incant.AutoTest.Toolchains` 验证，不得混入单元测试。
 
 ## 编写原则
 
@@ -46,3 +48,30 @@ dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configurati
 - 只有已经以相同配置成功构建时才使用 `--no-build`，只有已经成功还原时才使用 `--no-restore`。
 - 筛选结果为零个测试应视为错误，不得通过忽略退出码掩盖错误的筛选条件。
 - 存在多个测试项目时，优先逐个运行受影响项目；只有退出验收、合并或发布需要时才扩大到完整测试集合。
+
+## 工具链测试
+
+- Core 单元测试只能通过公开 Provider 接口构造受控候选，验证发现调度、筛选、配对和选择，不得读取本机工具链状态。
+- `Incant.AutoTest.Toolchains` 使用 Base CLI 提供 `discover` 与 `verify` 子命令；选项应归属实际使用它的子命令，不在入口处手工解析或堆叠无关选项。
+- `discover` 用于检查实际发现结果；`verify` 对工具链种类、目标、架构、版本和组件设置明确门禁，并使用解析出的 Profile 分别编译、链接 C 与 C++ HelloWorld。
+- `verify clang-cl msvc-link` 与 `verify clang-cl llvm-link` 分别验证 clang-cl 配合 MSVC 和 LLVM Windows 链接器的真实构建路径。
+- `verify` 对当前宿主可直接运行的原生产物继续执行冒烟；Emscripten 或 WASI 只有在本机存在对应运行时才执行，其他交叉编译产物只验证构建成功。
+- AutoTest 不负责下载、安装或修改全局环境；工具链准备由 CI Job 负责，编译使用临时目录并在结束时清理。
+
+```shell
+# Core 局部单元测试
+dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Toolchains.ResolverTests
+
+# Core 完整单元测试
+dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj
+
+# 查看当前机器的工具链目录
+dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj -- discover
+
+# 验证当前机器至少存在一个 x64 GCC Profile
+dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj -- verify --kind Gnu --target Linux --arch X64 --minimum 1
+
+# 分别验证 clang-cl 的两个 Windows 链接器变种
+dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj -- verify clang-cl msvc-link --arch X64
+dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj -- verify clang-cl llvm-link --arch X64
+```

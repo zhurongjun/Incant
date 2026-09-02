@@ -1,0 +1,542 @@
+name: toolchain-check
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchain-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  msvc:
+    name: MSVC (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: vs2022
+            os: windows-2022
+            product-major: 17
+          - label: vs2026
+            os: windows-2025-vs2026
+            product-major: 18
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup AutoTest
+        uses: ./.github/actions/setup-toolchains-autotest
+
+      - name: Verify MSVC
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $root = (& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1).Trim()
+          if (-not $root) {
+              throw 'Visual Studio was not found by vswhere.'
+          }
+
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind VisualStudio --target Windows --arch X64 --product-major ${{ matrix.product-major }} --component Compiler --component Linker --component Archiver --explicit-root $root --json build/toolchain-reports/msvc-${{ matrix.label }}-x64.json
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind VisualStudio --target Windows --arch ARM64 --product-major ${{ matrix.product-major }} --component Compiler --component Linker --component Archiver --explicit-root $root --json build/toolchain-reports/msvc-${{ matrix.label }}-arm64.json
+          exit $LASTEXITCODE
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-msvc-${{ matrix.label }}
+          path: build/toolchain-reports/*.json
+          if-no-files-found: warn
+
+  windows-sdk:
+    name: Windows SDK (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: vs2022
+            os: windows-2022
+            minimum: 2
+          - label: vs2026
+            os: windows-2025-vs2026
+            minimum: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup AutoTest
+        uses: ./.github/actions/setup-toolchains-autotest
+
+      - name: Verify Windows SDKs
+        shell: pwsh
+        run: |
+          $root = $env:WindowsSdkDir
+          if (-not $root) {
+              $root = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10'
+          }
+
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind WindowsSdk --target Windows --arch X64 --sdk-major 10 --minimum ${{ matrix.minimum }} --explicit-root $root --json build/toolchain-reports/windows-sdk-${{ matrix.label }}-x64.json
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind WindowsSdk --target Windows --arch ARM64 --sdk-major 10 --minimum ${{ matrix.minimum }} --explicit-root $root --json build/toolchain-reports/windows-sdk-${{ matrix.label }}-arm64.json
+          exit $LASTEXITCODE
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-windows-sdk-${{ matrix.label }}
+          path: build/toolchain-reports/*.json
+          if-no-files-found: warn
+
+  gcc:
+    name: GCC (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ubuntu22-gcc12
+            os: ubuntu-22.04
+            compiler: gcc-12
+            product-major: 12
+            target: Linux
+            arch: X64
+          - label: ubuntu24-gcc14
+            os: ubuntu-24.04
+            compiler: gcc-14
+            product-major: 14
+            target: Linux
+            arch: X64
+          - label: macos15-gcc14
+            os: macos-15
+            compiler: gcc-14
+            product-major: 14
+            target: MacOS
+            arch: ARM64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup AutoTest
+        uses: ./.github/actions/setup-toolchains-autotest
+
+      - name: Install GCC
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-${{ matrix.product-major }} g++-${{ matrix.product-major }}
+
+      - name: Verify GCC
+        shell: pwsh
+        run: |
+          $compiler = (Get-Command '${{ matrix.compiler }}').Source
+          $env:CC = $compiler
+          $root = Split-Path $compiler
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind Gnu --target ${{ matrix.target }} --arch ${{ matrix.arch }} --product-major ${{ matrix.product-major }} --compiler-major ${{ matrix.product-major }} --component Compiler --component CppCompiler --component Archiver --explicit-root $root --json build/toolchain-reports/gcc-${{ matrix.label }}.json
+          exit $LASTEXITCODE
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-gcc-${{ matrix.label }}
+          path: build/toolchain-reports/*.json
+          if-no-files-found: warn
+
+  clang:
+    name: Clang (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ubuntu22-clang15
+            os: ubuntu-22.04
+            compiler: clang-15
+            compiler-major: 15
+            target: Linux
+            arch: X64
+          - label: ubuntu24-clang18
+            os: ubuntu-24.04
+            compiler: clang-18
+            compiler-major: 18
+            target: Linux
+            arch: X64
+          - label: windows2026-llvm20
+            os: windows-2025-vs2026
+            compiler: C:/Program Files/LLVM/bin/clang.exe
+            compiler-major: 20
+            target: Windows
+            arch: X64
+          - label: macos15-llvm18
+            os: macos-15
+            compiler: /opt/homebrew/opt/llvm@18/bin/clang
+            compiler-major: 18
+            target: MacOS
+            arch: ARM64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup AutoTest
+        uses: ./.github/actions/setup-toolchains-autotest
+
+      - name: Install Clang
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-${{ matrix.compiler-major }} lld-${{ matrix.compiler-major }}
+
+      - name: Verify Clang
+        shell: pwsh
+        run: |
+          $compiler = (Get-Command '${{ matrix.compiler }}').Source
+          $env:CC = $compiler
+          $root = Split-Path $compiler
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind Llvm --target ${{ matrix.target }} --arch ${{ matrix.arch }} --product-major ${{ matrix.compiler-major }} --compiler-major ${{ matrix.compiler-major }} --component Compiler --component CppCompiler --component Linker --component Archiver --explicit-root $root --json build/toolchain-reports/clang-${{ matrix.label }}.json
+          exit $LASTEXITCODE
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-clang-${{ matrix.label }}
+          path: build/toolchain-reports/*.json
+          if-no-files-found: warn
+
+  clang-cl:
+    name: clang-cl (${{ matrix.label }})
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: msvc-link
+            command: msvc-link
+          - label: llvm-link
+            command: llvm-link
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup AutoTest
+        uses: ./.github/actions/setup-toolchains-autotest
+
+      - name: Verify clang-cl
+        shell: pwsh
+        run: |
+          $compiler = (Get-Command 'C:/Program Files/LLVM/bin/clang-cl.exe').Source
+          $root = Split-Path $compiler
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify clang-cl ${{ matrix.command }} --arch X64 --compiler-major 20 --msvc-major 18 --sdk-major 10 --explicit-root $root --json build/toolchain-reports/clang-cl-${{ matrix.label }}.json
+          exit $LASTEXITCODE
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-clang-cl-${{ matrix.label }}
+          path: build/toolchain-reports/*.json
+          if-no-files-found: warn
+
+  apple:
+    name: Apple Clang (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: xcode16
+            os: macos-15
+            product-major: 16
+          - label: xcode26
+            os: macos-26
+            product-major: 26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup AutoTest
+        uses: ./.github/actions/setup-toolchains-autotest
+
+      - name: Verify Apple toolchain and SDKs
+        shell: pwsh
+        run: |
+          $developerRoot = (& xcode-select -p).Trim()
+          $env:DEVELOPER_DIR = $developerRoot
+
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind Xcode --target MacOS --arch ARM64 --product-major ${{ matrix.product-major }} --component Compiler --component Linker --component Archiver --explicit-root $developerRoot --json build/toolchain-reports/apple-${{ matrix.label }}-macos.json
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind Xcode --target IOS --arch ARM64 --product-major ${{ matrix.product-major }} --explicit-root $developerRoot --json build/toolchain-reports/apple-${{ matrix.label }}-ios.json
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind Xcode --target IOSSimulator --arch ARM64 --product-major ${{ matrix.product-major }} --explicit-root $developerRoot --json build/toolchain-reports/apple-${{ matrix.label }}-ios-simulator.json
+          exit $LASTEXITCODE
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-apple-${{ matrix.label }}
+          path: build/toolchain-reports/*.json
+          if-no-files-found: warn
+
+  android:
+    name: Android NDK (${{ matrix.label }} r${{ matrix.product-major }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ubuntu24
+            os: ubuntu-24.04
+            ndk: 25.2.9519653
+            product-major: 25
+          - label: ubuntu24
+            os: ubuntu-24.04
+            ndk: 27.2.12479018
+            product-major: 27
+          - label: windows2022
+            os: windows-2022
+            ndk: 25.2.9519653
+            product-major: 25
+          - label: windows2022
+            os: windows-2022
+            ndk: 27.2.12479018
+            product-major: 27
+          - label: macos15
+            os: macos-15
+            ndk: 25.2.9519653
+            product-major: 25
+          - label: macos15
+            os: macos-15
+            ndk: 27.2.12479018
+            product-major: 27
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup AutoTest
+        uses: ./.github/actions/setup-toolchains-autotest
+
+      - name: Install and verify Android NDK
+        shell: pwsh
+        run: |
+          & sdkmanager --install 'ndk;${{ matrix.ndk }}'
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          $ndkRoot = Join-Path $env:ANDROID_HOME 'ndk/${{ matrix.ndk }}'
+          $env:ANDROID_NDK_HOME = $ndkRoot
+          $env:ANDROID_NDK_ROOT = $ndkRoot
+
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind AndroidNdk --target Android --arch ARM64 --product-major ${{ matrix.product-major }} --component Compiler --component Linker --component Archiver --explicit-root $ndkRoot --json build/toolchain-reports/android-${{ matrix.label }}-r${{ matrix.product-major }}-arm64.json
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind AndroidNdk --target Android --arch X64 --product-major ${{ matrix.product-major }} --explicit-root $ndkRoot --json build/toolchain-reports/android-${{ matrix.label }}-r${{ matrix.product-major }}-x64.json
+          exit $LASTEXITCODE
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-android-${{ matrix.label }}-r${{ matrix.product-major }}
+          path: build/toolchain-reports/*.json
+          if-no-files-found: warn
+
+  emscripten:
+    name: Emscripten (${{ matrix.label }} ${{ matrix.version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ubuntu24
+            os: ubuntu-24.04
+            version: 3.1.64
+          - label: ubuntu24
+            os: ubuntu-24.04
+            version: latest
+          - label: windows2022
+            os: windows-2022
+            version: 3.1.64
+          - label: windows2022
+            os: windows-2022
+            version: latest
+          - label: macos15
+            os: macos-15
+            version: 3.1.64
+          - label: macos15
+            os: macos-15
+            version: latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup AutoTest
+        uses: ./.github/actions/setup-toolchains-autotest
+
+      - name: Checkout emsdk
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: emscripten-core/emsdk
+          ref: 5eb0bde7585670252e8ba05e9d361627bffd08b5
+          path: build/emsdk
+          persist-credentials: false
+
+      - name: Install and verify Emscripten
+        shell: pwsh
+        run: |
+          $emsdkRoot = (Resolve-Path build/emsdk).Path
+          $emsdk = if ($IsWindows) {
+              Join-Path $emsdkRoot 'emsdk.bat'
+          } else {
+              Join-Path $emsdkRoot 'emsdk'
+          }
+
+          & $emsdk install '${{ matrix.version }}'
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          & $emsdk activate '${{ matrix.version }}'
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          $env:EMSDK = $emsdkRoot
+          $versionArguments = if ('${{ matrix.version }}' -eq '3.1.64') {
+              @('--product-major', '3')
+          } else {
+              @()
+          }
+
+          & dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind Emscripten --target Emscripten --arch Wasm32 --component Compiler --component Linker --component Archiver --component Ranlib --explicit-root $emsdkRoot --json build/toolchain-reports/emscripten-${{ matrix.label }}-${{ matrix.version }}.json @versionArguments
+          exit $LASTEXITCODE
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-emscripten-${{ matrix.label }}-${{ matrix.version }}
+          path: build/toolchain-reports/*.json
+          if-no-files-found: warn
+
+  wasi:
+    name: WASI SDK (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ubuntu24
+            os: ubuntu-24.04
+            archive: wasi-sdk-27.0-x86_64-linux.tar.gz
+            root: wasi-sdk-27.0-x86_64-linux
+            sha256: b7d4d944c88503e4f21d84af07ac293e3440b1b6210bfd7fe78e0afd92c23bc2
+          - label: windows2022
+            os: windows-2022
+            archive: wasi-sdk-27.0-x86_64-windows.tar.gz
+            root: wasi-sdk-27.0-x86_64-windows
+            sha256: 4a576c13125c91996d8cc3b70b7ea0612c2044598d2795c9be100d15f874adf6
+          - label: macos15
+            os: macos-15
+            archive: wasi-sdk-27.0-arm64-macos.tar.gz
+            root: wasi-sdk-27.0-arm64-macos
+            sha256: 055c3dc2766772c38e71a05d353e35c322c7b2c6458a36a26a836f9808a550f8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup AutoTest
+        uses: ./.github/actions/setup-toolchains-autotest
+
+      - name: Install and verify WASI SDK
+        shell: pwsh
+        run: |
+          $archive = Join-Path $PWD 'build/${{ matrix.archive }}'
+          $destination = Join-Path $PWD 'build/wasi-sdk'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          Invoke-WebRequest -Uri 'https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/${{ matrix.archive }}' -OutFile $archive
+
+          $actualHash = (Get-FileHash -Algorithm SHA256 $archive).Hash
+          if ($actualHash -ne '${{ matrix.sha256 }}') {
+              throw "Unexpected WASI SDK SHA-256: $actualHash"
+          }
+
+          & tar -xzf $archive -C $destination
+          if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+          }
+
+          $wasiRoot = Join-Path $destination '${{ matrix.root }}'
+          $env:WASI_SDK_PATH = $wasiRoot
+          dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj --configuration Release --no-build -- verify --kind WasiSdk --target Wasi --arch Wasm32 --product-major 27 --component Compiler --component Linker --component Archiver --explicit-root $wasiRoot --json build/toolchain-reports/wasi-${{ matrix.label }}.json
+          exit $LASTEXITCODE
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-wasi-${{ matrix.label }}
+          path: build/toolchain-reports/*.json
+          if-no-files-found: warn

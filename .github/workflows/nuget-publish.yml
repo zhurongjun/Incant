@@ -53,18 +53,26 @@ jobs:
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-  check:
-    name: Check release commit
+  basic_check:
+    name: Basic check release commit
     needs: validate
     permissions:
       contents: read
-    uses: ./.github/workflows/check.yml
+    uses: ./.github/workflows/basic-check.yml
+
+  toolchain_check:
+    name: Toolchain check release commit
+    needs: validate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/toolchain-check.yml
 
   pack:
     name: Pack package
     needs:
       - validate
-      - check
+      - basic_check
+      - toolchain_check
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

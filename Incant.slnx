@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/Source/">
     <Project Path="Source/Incant.Base/Incant.Base.csproj" />
+    <Project Path="Source/Incant.Core/Incant.Core.csproj" />
     <Project Path="Source/Incant/Incant.csproj" />
   </Folder>
   <Folder Name="/Benchmark/">
@@ -12,7 +13,9 @@
     <Project Path="Samples/Incant.Trace.Sample/Incant.Trace.Sample.csproj" />
   </Folder>
   <Folder Name="/Tests/">
+    <Project Path="Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj" />
     <Project Path="Tests/Incant.ProcessTestHelper/Incant.ProcessTestHelper.csproj" />
     <Project Path="Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj" />
+    <Project Path="Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj" />
   </Folder>
 </Solution>
