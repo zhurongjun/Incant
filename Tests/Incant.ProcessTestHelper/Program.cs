@@ -18,6 +18,9 @@ internal static class Program
 
         switch (arguments[0])
         {
+            case "deps":
+                return DepsCommands.Run(arguments[1..]);
+
             case "file-lock":
                 HoldFileLock(arguments[1]);
                 return 0;

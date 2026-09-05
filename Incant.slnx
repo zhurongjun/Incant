@@ -5,6 +5,7 @@
     <Project Path="Source/Incant/Incant.csproj" />
   </Folder>
   <Folder Name="/Benchmark/">
+    <Project Path="Benchmark/Incant.Bench.Deps/Incant.Bench.Deps.csproj" />
     <Project Path="Benchmark/Incant.Bench.Log/Incant.Bench.Log.csproj" />
     <Project Path="Benchmark/Incant.Bench.Trace/Incant.Bench.Trace.csproj" />
   </Folder>
