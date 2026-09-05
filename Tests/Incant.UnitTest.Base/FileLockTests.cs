@@ -410,19 +410,19 @@ public sealed class FileLockTests : IDisposable
                     await KillAsync(winner);
                     children.Remove(winner);
                     winner.Dispose();
+                    await AssertLockRecoversAsync(LockPath, timeout.Token);
                 }
                 else
                 {
                     await SendAsync(winner, "unlock", timeout.Token);
                     Assert.Equal("unlocked", await winner.StandardOutput.ReadLineAsync(timeout.Token));
+                    Assert.False(FileLock.IsLocked(LockPath));
+                    Assert.True(TryLockAndUnlock(LockPath));
                 }
-
-                Assert.False(FileLock.IsLocked(LockPath));
-                Assert.True(TryLockAndUnlock(LockPath));
             }
 
             await Task.WhenAll(children.Select(child => SendAsync(child, "quit", timeout.Token)));
-            await Task.WhenAll(children.Select(child => child.WaitForExitAsync(timeout.Token)));
+            await Task.WhenAll(children.Select(child => WaitForProcessExitAsync(child, timeout.Token)));
             Assert.All(children, static child => Assert.Equal(0, child.ExitCode));
         }
         finally
@@ -486,15 +486,22 @@ public sealed class FileLockTests : IDisposable
                 await child.StandardInput.FlushAsync(timeout.Token);
             }
 
-            await child.WaitForExitAsync(timeout.Token);
+            await WaitForProcessExitAsync(child, timeout.Token);
             if (!terminate)
             {
                 Assert.Equal(0, child.ExitCode);
             }
 
             Assert.True(File.Exists(LockPath));
-            Assert.False(FileLock.IsLocked(LockPath));
-            Assert.True(TryLockAndUnlock(LockPath));
+            if (terminate)
+            {
+                await AssertLockRecoversAsync(LockPath, timeout.Token);
+            }
+            else
+            {
+                Assert.False(FileLock.IsLocked(LockPath));
+                Assert.True(TryLockAndUnlock(LockPath));
+            }
         }
         finally
         {
@@ -522,6 +529,44 @@ public sealed class FileLockTests : IDisposable
         {
             fileLock.Unlock();
         }
+    }
+
+    private static async Task AssertLockRecoversAsync(string path, CancellationToken cancellationToken)
+    {
+        var owner = new FileLock(path);
+        try
+        {
+            // Only crash recovery tolerates delayed release, bounded by the test's cancellation deadline.
+            // Retry contention only; permission and other I/O errors must still fail the test immediately.
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (owner.TryLock())
+                {
+                    break;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
+            }
+
+            Assert.True(owner.OwnsLock);
+            Assert.True(FileLock.IsLocked(path));
+            Assert.False(TryLockAndUnlock(path));
+        }
+        finally
+        {
+            owner.Unlock();
+        }
+    }
+
+    private static async Task WaitForProcessExitAsync(Process child, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        // WaitForExit waits for the Windows process handle, not merely an available exit code.
+        // Join the bounded waiter before disposing the process, even if cancellation arrives during the wait.
+        bool exited = await Task.Run(() => child.WaitForExit(30_000), CancellationToken.None);
+        Assert.True(exited, "The child process did not finish terminating within 30 seconds.");
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private static async Task SendAsync(Process child, string command, CancellationToken cancellationToken)
@@ -578,7 +623,7 @@ public sealed class FileLockTests : IDisposable
         }
 
         // Cleanup must finish even when the test itself is cancelled.
-        await child.WaitForExitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+        await WaitForProcessExitAsync(child, CancellationToken.None);
     }
 
     private readonly string _directory;
