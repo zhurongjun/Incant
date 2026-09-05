@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Incant.Base;
 
 namespace Incant.ProcessTestHelper;
 
@@ -17,6 +18,14 @@ internal static class Program
 
         switch (arguments[0])
         {
+            case "file-lock":
+                HoldFileLock(arguments[1]);
+                return 0;
+
+            case "file-lock-contend":
+                RunFileLockContender(arguments[1]);
+                return 0;
+
             case "arguments":
                 Console.Out.Write(JsonSerializer.Serialize(arguments[1..]));
                 return 0;
@@ -61,6 +70,47 @@ internal static class Program
         byte[] content = encoding.GetBytes(value);
         stream.Write(content);
         stream.Flush();
+    }
+
+    private static void HoldFileLock(string path)
+    {
+        using FileLockScope scope = FileLock.LockScoped(path);
+        Console.WriteLine("locked");
+        Console.Out.Flush();
+        Console.ReadLine();
+    }
+
+    private static void RunFileLockContender(string path)
+    {
+        var fileLock = new FileLock(path);
+        Console.WriteLine("ready");
+        Console.Out.Flush();
+        try
+        {
+            while (Console.ReadLine() is { } command)
+            {
+                switch (command)
+                {
+                    case "try":
+                        Console.WriteLine(fileLock.TryLock() ? "locked" : "busy");
+                        break;
+                    case "unlock":
+                        fileLock.Unlock();
+                        Console.WriteLine("unlocked");
+                        break;
+                    case "quit":
+                        return;
+                    default:
+                        throw new ArgumentException("The file lock handshake command is invalid.");
+                }
+
+                Console.Out.Flush();
+            }
+        }
+        finally
+        {
+            fileLock.Unlock();
+        }
     }
 
     private static async Task WaitAsync(string standardOutput, string standardError)
