@@ -1,6 +1,6 @@
 using System.Globalization;
 using Incant.Base.Cli;
-using Incant.Core.Toolchains;
+using Incant.Core.Cpp;
 
 /// <summary>Builds and parses the AutoTest command tree with the shared Base CLI framework.</summary>
 internal static class AutoTestCommandLine
@@ -48,25 +48,25 @@ internal static class AutoTestCommandLine
 
     private static Command CreateDiscoverCommand(Action<AutoTestCommand> selectCommand)
     {
-        var kind = new NullableEnumOption<Kind>
+        var kind = new NullableEnumOption<AutoTestKind>
         {
             Name = "kind",
             ShortName = 'k',
             Help = "Limit discovery to one toolchain family.",
         };
-        var explicitRoot = CreateOptionalStringOption(
+        NullableStringOption explicitRoot = CreateOptionalStringOption(
             "explicit-root",
             "Require discovery of this installation root.");
-        var includePreview = CreateFlagOption(
+        FlagOption includePreview = CreateFlagOption(
             "include-preview",
             "Accept preview and experimental installations.");
-        var json = CreateOptionalStringOption("json", "Write a JSON discovery report to this path.");
+        NullableStringOption json = CreateOptionalStringOption("json", "Write a JSON discovery report to this path.");
 
         return new Command
         {
             Name = "discover",
             ShortName = 'd',
-            Help = "Print the toolchains, SDKs, profiles, and diagnostics found on this host.",
+            Help = "Print the toolchains, SDK components, and diagnostics found on this host.",
             Usage = "Incant.AutoTest.Toolchains discover [options]",
             Options = [kind, explicitRoot, includePreview, json],
             Execute = () =>
@@ -91,7 +91,7 @@ internal static class AutoTestCommandLine
 
     private static Command CreateVerifyCommand(Action<AutoTestCommand> selectCommand)
     {
-        var kind = new EnumOption<Kind>
+        var kind = new EnumOption<AutoTestKind>
         {
             Name = "kind",
             ShortName = 'k',
@@ -109,13 +109,13 @@ internal static class AutoTestCommandLine
             ShortName = 'a',
             Help = "The target architecture that must resolve.",
         };
-        var productMajor = CreateOptionalMajorOption(
+        NullableNonNegativeIntOption productMajor = CreateOptionalMajorOption(
             "product-major",
             "Require this product major version.");
-        var compilerMajor = CreateOptionalMajorOption(
+        NullableNonNegativeIntOption compilerMajor = CreateOptionalMajorOption(
             "compiler-major",
             "Require this compiler major version.");
-        var sdkMajor = CreateOptionalMajorOption("sdk-major", "Require this SDK major version.");
+        NullableNonNegativeIntOption sdkMajor = CreateOptionalMajorOption("sdk-major", "Require this SDK major version.");
         var components = new EnumListOption<ComponentKind>
         {
             Name = "component",
@@ -131,19 +131,19 @@ internal static class AutoTestCommandLine
             IsRequired = false,
             Value = 1,
         };
-        var explicitRoot = CreateOptionalStringOption(
+        NullableStringOption explicitRoot = CreateOptionalStringOption(
             "explicit-root",
             "Also verify discovery through this explicit installation root.");
-        var includePreview = CreateFlagOption(
+        FlagOption includePreview = CreateFlagOption(
             "include-preview",
             "Accept preview and experimental installations.");
-        var json = CreateOptionalStringOption("json", "Write a JSON verification report to this path.");
+        NullableStringOption json = CreateOptionalStringOption("json", "Write a JSON verification report to this path.");
 
         return new Command
         {
             Name = "verify",
             ShortName = 'v',
-            Help = "Resolve a requested profile and compile C and C++ HelloWorld programs.",
+            Help = "Select tools and SDKs and compile C and C++ HelloWorld programs.",
             Usage = "Incant.AutoTest.Toolchains verify --kind <kind> [options]",
             SubCommands = [CreateClangClCommand(selectCommand)],
             Options =
@@ -206,22 +206,22 @@ internal static class AutoTestCommandLine
             ShortName = 'a',
             Help = "The Windows target architecture that must compile.",
         };
-        var compilerMajor = CreateOptionalMajorOption(
+        NullableNonNegativeIntOption compilerMajor = CreateOptionalMajorOption(
             "compiler-major",
             "Require this clang-cl major version.");
-        var msvcMajor = CreateOptionalMajorOption(
+        NullableNonNegativeIntOption msvcMajor = CreateOptionalMajorOption(
             "msvc-major",
             "Require this Visual Studio product major version.");
-        var sdkMajor = CreateOptionalMajorOption(
+        NullableNonNegativeIntOption sdkMajor = CreateOptionalMajorOption(
             "sdk-major",
             "Require this Windows SDK major version.");
-        var explicitRoot = CreateOptionalStringOption(
+        NullableStringOption explicitRoot = CreateOptionalStringOption(
             "explicit-root",
             "Also verify LLVM discovery through this explicit installation root.");
-        var includePreview = CreateFlagOption(
+        FlagOption includePreview = CreateFlagOption(
             "include-preview",
             "Accept preview and experimental installations.");
-        var json = CreateOptionalStringOption("json", "Write a JSON verification report to this path.");
+        NullableStringOption json = CreateOptionalStringOption("json", "Write a JSON verification report to this path.");
         string commandName = linker == ClangClLinker.Msvc ? "msvc-link" : "llvm-link";
         string linkerName = linker == ClangClLinker.Msvc ? "MSVC link.exe" : "LLVM lld-link.exe";
 
@@ -246,7 +246,7 @@ internal static class AutoTestCommandLine
                 selectCommand(new AutoTestCommand
                 {
                     Operation = AutoTestOperation.VerifyClangCl,
-                    Kind = Kind.Llvm,
+                    Kind = AutoTestKind.Llvm,
                     Target = TargetPlatform.Windows,
                     Architecture = architecture.Value,
                     CompilerMajor = compilerMajor.Value,

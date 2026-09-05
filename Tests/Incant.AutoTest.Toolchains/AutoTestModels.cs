@@ -1,10 +1,14 @@
-using Incant.Core.Toolchains;
+using Incant.Core.Cpp;
+using Incant.Core.Cpp.FindSdk;
+using Incant.Core.Cpp.FindTools;
 
 /// <summary>Identifies the operation selected through the command tree.</summary>
 internal enum AutoTestOperation
 {
     Discover,
+
     Verify,
+
     VerifyClangCl,
 }
 
@@ -12,6 +16,7 @@ internal enum AutoTestOperation
 internal enum ClangClLinker
 {
     Msvc,
+
     Lld,
 }
 
@@ -20,7 +25,7 @@ internal sealed class AutoTestCommand
 {
     internal required AutoTestOperation Operation { get; init; }
 
-    internal Kind? Kind { get; init; }
+    internal AutoTestKind? Kind { get; init; }
 
     internal TargetPlatform? Target { get; init; }
 
@@ -50,20 +55,85 @@ internal sealed class AutoTestCommand
 /// <summary>Represents the result of parsing before any discovery work begins.</summary>
 internal sealed record AutoTestParseResult(AutoTestCommand? Command, int ExitCode);
 
-/// <summary>Combines one discovery catalog with the smoke tests performed against it.</summary>
-internal sealed class AutoTestRun
+/// <summary>Preserves independently discovered tools and SDKs alongside one explicit smoke configuration.</summary>
+internal sealed class AutoTestRun(string name, IReadOnlyList<ToolSet> toolSets, IEnumerable<Diagnostic> diagnostics)
 {
-    internal AutoTestRun(string name, Catalog catalog)
-    {
-        Name = name;
-        Catalog = catalog;
-    }
+    internal string Name { get; } = name;
 
-    internal string Name { get; }
+    internal IReadOnlyList<ToolSet> ToolSets { get; } = toolSets;
 
-    internal Catalog Catalog { get; }
+    internal List<Sdk> Sdks { get; } = [];
+
+    internal List<Diagnostic> Diagnostics { get; } = diagnostics.ToList();
+
+    internal int DiscoveredInstallationCount { get; set; }
+
+    internal SmokeConfiguration? Configuration { get; set; }
 
     internal IReadOnlyList<ToolchainSmokeResult> SmokeTests { get; set; } = [];
+}
+
+/// <summary>Contains only AutoTest's selected build inputs; Core does not construct or own this combination.</summary>
+internal sealed record SmokeConfiguration(
+    ToolSet ToolSet,
+    Sdk? Sdk,
+    TargetLayout Layout,
+    string TargetTriple,
+    ToolSet? MsvcToolSet,
+    Sdk? MsvcSdk,
+    Sdk? CompilerSdk)
+{
+    internal TargetPlatform TargetPlatform => Layout.Platform;
+
+    internal TargetArchitecture TargetArchitecture => Layout.Architecture;
+
+    internal required Tool CCompiler { get; init; }
+
+    internal required Tool CppCompiler { get; init; }
+
+    internal Tool? Linker { get; init; }
+
+    internal TargetLayout? MsvcLayout { get; init; }
+
+    internal TargetLayout? CompilerLayout { get; init; }
+}
+
+/// <summary>Preserves the existing command-line family names, including the SDK-only WindowsSdk case.</summary>
+internal enum AutoTestKind
+{
+    VisualStudio,
+
+    WindowsSdk,
+
+    Gnu,
+
+    Llvm,
+
+    Xcode,
+
+    AndroidNdk,
+
+    Emscripten,
+
+    WasiSdk,
+}
+
+/// <summary>Existing command-line role names, mapped to concrete tool names only by AutoTest.</summary>
+internal enum ComponentKind
+{
+    Compiler,
+
+    CppCompiler,
+
+    Linker,
+
+    Archiver,
+
+    Ranlib,
+
+    ResourceDirectory,
+
+    Sysroot,
 }
 
 /// <summary>Records compilation and optional execution for one source language.</summary>

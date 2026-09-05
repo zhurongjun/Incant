@@ -51,16 +51,21 @@ dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configurati
 
 ## 工具链测试
 
-- Core 单元测试只能通过公开 Provider 接口构造受控候选，验证发现调度、筛选、配对和选择，不得读取本机工具链状态。
+- Core 单元测试只能通过公开 Provider 接口构造受控候选，验证 Cpp.FindTools / Cpp.FindSdk 的发现调度、筛选、选择和不可变快照，不得读取本机安装、Registry 或网络。
+- 工具与 SDK 独立查找：先选择具体版本的 ToolSet，再按工具名查找；SDK 返回独立的资源布局，不在 Core 中自动配对。测试需覆盖语言路径顺序、外部引用、目标/ABI/API 隔离、取消和每次重新查询的行为。
 - `Incant.AutoTest.Toolchains` 使用 Base CLI 提供 `discover` 与 `verify` 子命令；选项应归属实际使用它的子命令，不在入口处手工解析或堆叠无关选项。
-- `discover` 用于检查实际发现结果；`verify` 对工具链种类、目标、架构、版本和组件设置明确门禁，并使用解析出的 Profile 分别编译、链接 C 与 C++ HelloWorld。
+- `discover` 用于检查实际发现结果；`verify` 对种类、目标、架构、版本和组件设置明确门禁，由 AutoTest 显式组合工具、平台 SDK 和编译器开发文件，再分别编译、链接 C 与 C++ HelloWorld。
+- 内置 Provider 的安装布局和只读驱动探测只在 AutoTest 验证；重点关注 Xcode/CLT、独立编译器与 Apple SDK、Linux multiarch/multilib、NDK 按 ABI 的 API、缺失可选资源和错误显式路径。不得将未运行的宿主验证报告为已通过。
 - `verify clang-cl msvc-link` 与 `verify clang-cl llvm-link` 分别验证 clang-cl 配合 MSVC 和 LLVM Windows 链接器的真实构建路径。
 - `verify` 对当前宿主可直接运行的原生产物继续执行冒烟；Emscripten 或 WASI 只有在本机存在对应运行时才执行，其他交叉编译产物只验证构建成功。
 - AutoTest 不负责下载、安装或修改全局环境；工具链准备由 CI Job 负责，编译使用临时目录并在结束时清理。
 
 ```shell
 # Core 局部单元测试
-dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Toolchains.ResolverTests
+dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Cpp.FindTools.FinderTests
+
+# SDK 资源与查询语义的局部测试
+dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Cpp.FindSdk.FinderTests
 
 # Core 完整单元测试
 dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj
@@ -68,7 +73,7 @@ dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj
 # 查看当前机器的工具链目录
 dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj -- discover
 
-# 验证当前机器至少存在一个 x64 GCC Profile
+# 验证当前机器至少存在一个可用于 x64 GCC 冒烟的安装
 dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj -- verify --kind Gnu --target Linux --arch X64 --minimum 1
 
 # 分别验证 clang-cl 的两个 Windows 链接器变种

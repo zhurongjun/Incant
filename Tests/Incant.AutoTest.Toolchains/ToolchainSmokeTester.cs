@@ -1,37 +1,35 @@
+using System.ComponentModel;
 using Incant.Base;
-using Incant.Core.Toolchains;
+using Incant.Core.Cpp;
+using Incant.Core.Cpp.FindSdk;
+using Kind = Incant.Core.Cpp.FindTools.Kind;
 
-/// <summary>Compiles and, when possible, executes C and C++ HelloWorld programs with a resolved profile.</summary>
+/// <summary>Compiles and, when possible, executes C and C++ HelloWorld programs with a resolved configuration.</summary>
 internal static class ToolchainSmokeTester
 {
     private static readonly TimeSpan s_compileTimeout = TimeSpan.FromMinutes(2);
+
     private static readonly TimeSpan s_executionTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>Runs both language probes and preserves both outcomes even when one probe fails.</summary>
     internal static Task<IReadOnlyList<ToolchainSmokeResult>> RunAsync(
-        Profile profile,
-        Catalog catalog,
+        SmokeConfiguration configuration,
         CancellationToken cancellationToken = default) =>
-        RunCoreAsync(profile, catalog, clangClLinker: null, msvcMajor: null, cancellationToken);
+        RunCoreAsync(configuration, clangClLinker: null, cancellationToken);
 
     /// <summary>Runs C and C++ probes through clang-cl and the selected Windows linker.</summary>
     internal static Task<IReadOnlyList<ToolchainSmokeResult>> RunClangClAsync(
-        Profile profile,
-        Catalog catalog,
+        SmokeConfiguration configuration,
         ClangClLinker linker,
-        int? msvcMajor,
         CancellationToken cancellationToken = default) =>
-        RunCoreAsync(profile, catalog, linker, msvcMajor, cancellationToken);
+        RunCoreAsync(configuration, linker, cancellationToken);
 
     private static async Task<IReadOnlyList<ToolchainSmokeResult>> RunCoreAsync(
-        Profile profile,
-        Catalog catalog,
+        SmokeConfiguration configuration,
         ClangClLinker? clangClLinker,
-        int? msvcMajor,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(profile);
-        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(configuration);
 
         string workingDirectory = Path.Combine(
             Path.GetTempPath(),
@@ -45,12 +43,10 @@ internal static class ToolchainSmokeTester
             foreach (SmokeLanguage language in new[] { SmokeLanguage.C, SmokeLanguage.Cpp })
             {
                 results.Add(await RunLanguageAsync(
-                    profile,
-                    catalog,
+                    configuration,
                     language,
                     workingDirectory,
                     clangClLinker,
-                    msvcMajor,
                     cancellationToken).ConfigureAwait(false));
             }
 
@@ -70,12 +66,10 @@ internal static class ToolchainSmokeTester
     }
 
     private static async Task<ToolchainSmokeResult> RunLanguageAsync(
-        Profile profile,
-        Catalog catalog,
+        SmokeConfiguration configuration,
         SmokeLanguage language,
         string workingDirectory,
         ClangClLinker? clangClLinker,
-        int? msvcMajor,
         CancellationToken cancellationToken)
     {
         string languageName = language == SmokeLanguage.C ? "C" : "C++";
@@ -96,21 +90,18 @@ internal static class ToolchainSmokeTester
         {
             CompilerInvocation invocation = clangClLinker is ClangClLinker selectedLinker
                 ? CreateClangClInvocation(
-                    profile,
-                    catalog,
+                    configuration,
                     selectedLinker,
-                    msvcMajor,
                     language,
                     sourcePath,
                     workingDirectory)
                 : CreateCompilerInvocation(
-                    profile,
-                    catalog,
+                    configuration,
                     language,
                     sourcePath,
                     workingDirectory);
             compilerPath = invocation.ExecutablePath;
-            linkerPath = invocation.LinkerPath;
+            linkerPath = invocation.LinkerPath ?? configuration.Linker?.Path;
             ProcessResult compilation = await RunToolAsync(
                 invocation.ExecutablePath,
                 invocation.Arguments,
@@ -122,12 +113,12 @@ internal static class ToolchainSmokeTester
                     languageName,
                     compilerPath,
                     linkerPath,
-                    profile.TargetTriple,
+                    configuration.TargetTriple,
                     compilation);
             }
 
             ExecutionInvocation? execution = CreateExecutionInvocation(
-                profile,
+                configuration,
                 invocation.OutputPath,
                 workingDirectory);
             if (execution is null)
@@ -136,7 +127,7 @@ internal static class ToolchainSmokeTester
                     languageName,
                     compilerPath,
                     linkerPath,
-                    profile.TargetTriple,
+                    configuration.TargetTriple,
                     CompilationSucceeded: true,
                     compilation.StandardOutput,
                     compilation.StandardError,
@@ -144,7 +135,7 @@ internal static class ToolchainSmokeTester
                     ExecutionSucceeded: null,
                     ExecutionStandardOutput: string.Empty,
                     ExecutionStandardError: string.Empty,
-                    GetExecutionSkipReason(profile),
+                    GetExecutionSkipReason(configuration),
                     Error: null);
             }
 
@@ -162,7 +153,7 @@ internal static class ToolchainSmokeTester
                 languageName,
                 compilerPath,
                 linkerPath,
-                profile.TargetTriple,
+                configuration.TargetTriple,
                 CompilationSucceeded: true,
                 compilation.StandardOutput,
                 compilation.StandardError,
@@ -179,13 +170,13 @@ internal static class ToolchainSmokeTester
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is AutoTestFailureException or IOException or UnauthorizedAccessException or Win32Exception)
         {
             return new ToolchainSmokeResult(
                 languageName,
                 compilerPath,
                 linkerPath,
-                profile.TargetTriple,
+                configuration.TargetTriple,
                 CompilationSucceeded: false,
                 CompilationStandardOutput: string.Empty,
                 CompilationStandardError: string.Empty,
@@ -198,34 +189,27 @@ internal static class ToolchainSmokeTester
         }
     }
 
-    // Each platform invocation is built exclusively from the resolved catalog rather than ambient compiler flags.
+    // Each platform invocation is built exclusively from the resolved run rather than ambient compiler flags.
     private static CompilerInvocation CreateCompilerInvocation(
-        Profile profile,
-        Catalog catalog,
+        SmokeConfiguration configuration,
         SmokeLanguage language,
         string sourcePath,
         string workingDirectory)
     {
-        string compilerPath = SelectComponentPath(
-            profile.Installation,
-            language == SmokeLanguage.C
-                ? ComponentKind.Compiler
-                : ComponentKind.CppCompiler,
-            profile.TargetArchitecture);
+        string compilerPath = (language == SmokeLanguage.C ? configuration.CCompiler : configuration.CppCompiler).Path;
         string outputPath = Path.Combine(
             workingDirectory,
-            GetOutputFileName(profile, language));
+            GetOutputFileName(configuration, language));
         var options = new ProcessOptions
         {
             WorkingDirectory = workingDirectory,
             Timeout = s_compileTimeout,
         };
 
-        return profile.Installation.Kind switch
+        return configuration.ToolSet.Kind switch
         {
             Kind.VisualStudio => CreateMsvcInvocation(
-                profile,
-                profile.Installation,
+                configuration,
                 compilerPath,
                 language,
                 sourcePath,
@@ -233,13 +217,12 @@ internal static class ToolchainSmokeTester
                 options),
             Kind.Gnu => new CompilerInvocation(
                 compilerPath,
-                CreateUnixCompilerArguments(language, sourcePath, outputPath),
+                CreateGnuArguments(configuration, language, sourcePath, outputPath),
                 outputPath,
                 options),
-            Kind.Llvm when profile.TargetPlatform == TargetPlatform.Windows =>
+            Kind.Llvm when configuration.TargetPlatform == TargetPlatform.Windows =>
                 CreateWindowsClangInvocation(
-                    profile,
-                    catalog,
+                    configuration,
                     compilerPath,
                     language,
                     sourcePath,
@@ -247,18 +230,18 @@ internal static class ToolchainSmokeTester
                     options),
             Kind.Llvm => new CompilerInvocation(
                 compilerPath,
-                CreateClangArguments(profile, language, sourcePath, outputPath),
+                CreateClangArguments(configuration, language, sourcePath, outputPath),
                 outputPath,
                 options),
             Kind.Xcode => CreateXcodeInvocation(
-                profile,
+                configuration,
                 compilerPath,
                 language,
                 sourcePath,
                 outputPath,
                 options),
             Kind.AndroidNdk => CreateAndroidInvocation(
-                profile,
+                configuration,
                 compilerPath,
                 language,
                 sourcePath,
@@ -270,57 +253,51 @@ internal static class ToolchainSmokeTester
                 outputPath,
                 options),
             Kind.WasiSdk => CreateWasiInvocation(
-                profile,
+                configuration,
                 compilerPath,
                 language,
                 sourcePath,
                 outputPath,
                 options),
             _ => throw new AutoTestFailureException(
-                $"Smoke compilation is not implemented for {profile.Installation.Kind}."),
+                $"Smoke compilation is not implemented for {configuration.ToolSet.Kind}."),
         };
     }
 
     private static CompilerInvocation CreateClangClInvocation(
-        Profile profile,
-        Catalog catalog,
+        SmokeConfiguration configuration,
         ClangClLinker linker,
-        int? msvcMajor,
         SmokeLanguage language,
         string sourcePath,
         string workingDirectory)
     {
-        if (profile.Installation.Kind != Kind.Llvm
-            || profile.TargetPlatform != TargetPlatform.Windows)
+        if (!Enum.IsDefined(linker))
         {
-            throw new AutoTestFailureException(
-                "clang-cl verification requires a resolved LLVM Windows profile.");
+            throw new ArgumentOutOfRangeException(nameof(linker), linker, null);
         }
 
-        string compilerPath = SelectClangClPath(profile.Installation);
-        Installation msvcToolchain = SelectMsvcToolchain(
-            catalog,
-            profile.TargetArchitecture,
-            msvcMajor);
-        WindowsCompilationLayout layout = CreateWindowsCompilationLayout(profile, msvcToolchain);
-        string linkerPath = linker switch
+        if (configuration.ToolSet.Kind != Kind.Llvm
+            || configuration.TargetPlatform != TargetPlatform.Windows)
         {
-            ClangClLinker.Msvc => SelectComponentPath(
-                msvcToolchain,
-                ComponentKind.Linker,
-                profile.TargetArchitecture),
-            ClangClLinker.Lld => FindRequiredSiblingExecutable(compilerPath, "lld-link.exe"),
-            _ => throw new ArgumentOutOfRangeException(nameof(linker), linker, null),
-        };
+            throw new AutoTestFailureException(
+                "clang-cl verification requires a resolved LLVM Windows configuration.");
+        }
+
+        string compilerPath = (language == SmokeLanguage.C ? configuration.CCompiler : configuration.CppCompiler).Path;
+        WindowsCompilationLayout layout = CreateWindowsCompilationLayout(configuration);
+        string linkerPath = configuration.Linker?.Path
+            ?? throw new AutoTestFailureException("No Windows linker was selected.");
         string outputPath = Path.Combine(
             workingDirectory,
-            GetOutputFileName(profile, language));
+            GetOutputFileName(configuration, language));
         var arguments = new List<string>
         {
             "/nologo",
+            "/MT",
             language == SmokeLanguage.C ? "/TC" : "/TP",
             language == SmokeLanguage.C ? "/std:c11" : "/std:c++17",
-            $"/clang:--target={profile.TargetTriple}",
+            $"/clang:--target={configuration.TargetTriple}",
+            $"/clang:--ld-path={linkerPath}",
             linker == ClangClLinker.Msvc ? "-fuse-ld=link" : "-fuse-ld=lld-link",
         };
         if (language == SmokeLanguage.Cpp)
@@ -352,18 +329,18 @@ internal static class ToolchainSmokeTester
     }
 
     private static CompilerInvocation CreateMsvcInvocation(
-        Profile profile,
-        Installation msvcToolchain,
+        SmokeConfiguration configuration,
         string compilerPath,
         SmokeLanguage language,
         string sourcePath,
         string outputPath,
         ProcessOptions baseOptions)
     {
-        WindowsCompilationLayout layout = CreateWindowsCompilationLayout(profile, msvcToolchain);
+        WindowsCompilationLayout layout = CreateWindowsCompilationLayout(configuration);
         var arguments = new List<string>
         {
             "/nologo",
+            "/MT",
             language == SmokeLanguage.C ? "/TC" : "/TP",
             language == SmokeLanguage.C ? "/std:c11" : "/std:c++17",
         };
@@ -382,25 +359,23 @@ internal static class ToolchainSmokeTester
             compilerPath,
             arguments,
             outputPath,
-            WithPath(baseOptions, Path.GetDirectoryName(compilerPath)!, layout.ToolBinaryDirectory));
+            WithPath(baseOptions, Path.GetDirectoryName(compilerPath)!, layout.ToolBinaryDirectory),
+            configuration.Linker!.Path);
     }
 
     private static CompilerInvocation CreateWindowsClangInvocation(
-        Profile profile,
-        Catalog catalog,
+        SmokeConfiguration configuration,
         string compilerPath,
         SmokeLanguage language,
         string sourcePath,
         string outputPath,
         ProcessOptions baseOptions)
     {
-        Installation msvcToolchain = SelectMsvcToolchain(
-            catalog,
-            profile.TargetArchitecture,
-            requiredProductMajor: null);
-        WindowsCompilationLayout layout = CreateWindowsCompilationLayout(profile, msvcToolchain);
-        List<string> arguments = CreateClangArguments(profile, language, sourcePath, outputPath).ToList();
+        WindowsCompilationLayout layout = CreateWindowsCompilationLayout(configuration);
+        List<string> arguments = CreateClangArguments(configuration, language, sourcePath, outputPath).ToList();
+        arguments.Add("-fms-runtime-lib=static");
         arguments.Add("-fuse-ld=lld");
+        arguments.Add("--ld-path=" + configuration.Linker!.Path);
         foreach (string includeDirectory in layout.IncludeDirectories)
         {
             arguments.Add("-isystem");
@@ -419,26 +394,27 @@ internal static class ToolchainSmokeTester
             WithPath(
                 baseOptions,
                 Path.GetDirectoryName(compilerPath)!,
-                layout.ToolBinaryDirectory));
+                layout.ToolBinaryDirectory),
+            configuration.Linker!.Path);
     }
 
     private static CompilerInvocation CreateXcodeInvocation(
-        Profile profile,
+        SmokeConfiguration configuration,
         string compilerPath,
         SmokeLanguage language,
         string sourcePath,
         string outputPath,
         ProcessOptions options)
     {
-        SdkInstallation sdk = profile.Sdk
-            ?? throw new AutoTestFailureException("The selected Xcode profile has no SDK.");
+        string sysroot = configuration.Layout.SysrootPath
+            ?? throw new AutoTestFailureException("The selected Xcode configuration has no SDK.");
         List<string> arguments = CreateLanguageStandardArguments(language);
         arguments.AddRange(
         [
             "-target",
-            CreateAppleSmokeTargetTriple(profile),
+            CreateAppleSmokeTargetTriple(configuration),
             "-isysroot",
-            sdk.SysrootPath,
+            sysroot,
             sourcePath,
             "-o",
             outputPath,
@@ -447,20 +423,20 @@ internal static class ToolchainSmokeTester
     }
 
     private static CompilerInvocation CreateAndroidInvocation(
-        Profile profile,
+        SmokeConfiguration configuration,
         string compilerPath,
         SmokeLanguage language,
         string sourcePath,
         string outputPath,
         ProcessOptions options)
     {
-        SdkInstallation sdk = profile.Sdk
-            ?? throw new AutoTestFailureException("The selected Android NDK profile has no SDK.");
-        int minimumApi = profile.TargetArchitecture is
+        string sysroot = configuration.Layout.SysrootPath
+            ?? throw new AutoTestFailureException("The selected Android NDK configuration has no SDK.");
+        int minimumApi = configuration.TargetArchitecture is
             TargetArchitecture.ARM64 or TargetArchitecture.X64
                 ? 21
                 : 16;
-        int apiLevel = sdk.SupportedApiLevels.FirstOrDefault(level => level >= minimumApi);
+        int apiLevel = configuration.Layout.ApiLevels.FirstOrDefault(level => level >= minimumApi);
         if (apiLevel == 0)
         {
             throw new AutoTestFailureException(
@@ -470,8 +446,8 @@ internal static class ToolchainSmokeTester
         List<string> arguments = CreateLanguageStandardArguments(language);
         arguments.AddRange(
         [
-            $"--target={profile.TargetTriple}{apiLevel}",
-            $"--sysroot={sdk.SysrootPath}",
+            $"--target={configuration.TargetTriple}{apiLevel}",
+            $"--sysroot={sysroot}",
             sourcePath,
             "-o",
             outputPath,
@@ -480,25 +456,43 @@ internal static class ToolchainSmokeTester
     }
 
     private static CompilerInvocation CreateWasiInvocation(
-        Profile profile,
+        SmokeConfiguration configuration,
         string compilerPath,
         SmokeLanguage language,
         string sourcePath,
         string outputPath,
         ProcessOptions options)
     {
-        SdkInstallation sdk = profile.Sdk
-            ?? throw new AutoTestFailureException("The selected WASI profile has no SDK.");
+        string sysroot = configuration.Layout.SysrootPath
+            ?? throw new AutoTestFailureException("The selected WASI configuration has no SDK.");
         List<string> arguments = CreateLanguageStandardArguments(language);
         arguments.AddRange(
         [
-            $"--target={profile.TargetTriple}",
-            $"--sysroot={sdk.SysrootPath}",
+            $"--target={configuration.TargetTriple}",
+            $"--sysroot={sysroot}",
             sourcePath,
             "-o",
             outputPath,
         ]);
         return new CompilerInvocation(compilerPath, arguments, outputPath, options);
+    }
+
+    private static IReadOnlyList<string> CreateGnuArguments(
+        SmokeConfiguration configuration, SmokeLanguage language, string sourcePath, string outputPath)
+    {
+        List<string> arguments = CreateUnixCompilerArguments(language, sourcePath, outputPath).ToList();
+        if (AutoTestDiscovery.GnuArchitectureArgument(configuration.Layout) is string architectureArgument)
+        {
+            arguments.Add(architectureArgument);
+        }
+
+        if (configuration.Layout.SysrootPath is string sysroot)
+        {
+            arguments.AddRange(configuration.Sdk?.Kind == Incant.Core.Cpp.FindSdk.Kind.Apple
+                ? ["-isysroot", sysroot] : ["--sysroot=" + sysroot]);
+        }
+
+        return arguments;
     }
 
     private static IReadOnlyList<string> CreateUnixCompilerArguments(
@@ -512,21 +506,20 @@ internal static class ToolchainSmokeTester
     }
 
     private static IReadOnlyList<string> CreateClangArguments(
-        Profile profile,
+        SmokeConfiguration configuration,
         SmokeLanguage language,
         string sourcePath,
         string outputPath)
     {
         List<string> arguments = CreateLanguageStandardArguments(language);
-        string targetTriple = profile.TargetPlatform == TargetPlatform.MacOS
-            ? CreateAppleSmokeTargetTriple(profile)
-            : profile.TargetTriple;
+        string targetTriple = configuration.TargetPlatform == TargetPlatform.MacOS
+            ? CreateAppleSmokeTargetTriple(configuration)
+            : configuration.TargetTriple;
         arguments.Add($"--target={targetTriple}");
-        if (profile.TargetPlatform == TargetPlatform.MacOS
-            && profile.Sdk?.Kind == Kind.Xcode)
+        if (configuration.Layout.SysrootPath is string sysroot)
         {
-            arguments.Add("-isysroot");
-            arguments.Add(profile.Sdk.SysrootPath);
+            arguments.AddRange(configuration.Sdk?.Kind == Incant.Core.Cpp.FindSdk.Kind.Apple
+                ? ["-isysroot", sysroot] : ["--sysroot=" + sysroot]);
         }
 
         arguments.AddRange([sourcePath, "-o", outputPath]);
@@ -536,159 +529,20 @@ internal static class ToolchainSmokeTester
     private static List<string> CreateLanguageStandardArguments(SmokeLanguage language) =>
         [language == SmokeLanguage.C ? "-std=c11" : "-std=c++17"];
 
-    // MSVC and standalone Clang both need an explicit, matched MSVC/Windows SDK layout in unattended CI.
-    private static WindowsCompilationLayout CreateWindowsCompilationLayout(
-        Profile profile,
-        Installation msvcToolchain)
+    // Only the upper layer composes SDK inventories into include/library arguments.
+    private static WindowsCompilationLayout CreateWindowsCompilationLayout(SmokeConfiguration configuration)
     {
-        SdkInstallation sdk = profile.Sdk
-            ?? throw new AutoTestFailureException("The selected Windows profile has no Windows SDK.");
-        string sdkVersionName = FindSdkVersionDirectoryName(sdk);
-        string architectureName = GetWindowsArchitectureName(profile.TargetArchitecture);
-        string msvcBinary = SelectComponentPath(
-            msvcToolchain,
-            ComponentKind.Linker,
-            profile.TargetArchitecture);
-
-        string[] includeDirectories =
-        [
-            Path.Combine(msvcToolchain.RootPath, "include"),
-            Path.Combine(sdk.RootPath, "Include", sdkVersionName, "ucrt"),
-            Path.Combine(sdk.RootPath, "Include", sdkVersionName, "shared"),
-            Path.Combine(sdk.RootPath, "Include", sdkVersionName, "um"),
-            Path.Combine(sdk.RootPath, "Include", sdkVersionName, "winrt"),
-        ];
-        string[] libraryDirectories =
-        [
-            Path.Combine(msvcToolchain.RootPath, "lib", architectureName),
-            Path.Combine(sdk.RootPath, "Lib", sdkVersionName, "ucrt", architectureName),
-            Path.Combine(sdk.RootPath, "Lib", sdkVersionName, "um", architectureName),
-        ];
-        string? missingPath = includeDirectories
-            .Concat(libraryDirectories)
-            .FirstOrDefault(path => !Directory.Exists(path));
-        if (missingPath is not null)
-        {
-            throw new AutoTestFailureException(
-                $"The selected Windows profile is missing '{missingPath}'.");
-        }
-
-        return new WindowsCompilationLayout(
-            includeDirectories,
-            libraryDirectories,
-            Path.GetDirectoryName(msvcBinary)!);
+        TargetLayout msvcLayout = configuration.MsvcLayout
+            ?? throw new AutoTestFailureException("The selected Windows configuration has no MSVC development files.");
+        Resource[] resources = msvcLayout.Resources.Concat(configuration.Layout.Resources).ToArray();
+        string[] includes = resources.Where(resource => resource.Purpose == ResourcePurpose.CppInclude)
+            .Select(resource => resource.Path).Distinct().ToArray();
+        string[] libraries = resources.Where(resource => resource.Purpose == ResourcePurpose.LibraryDirectory)
+            .Select(resource => resource.Path).Distinct().ToArray();
+        string linker = configuration.Linker?.Path
+            ?? throw new AutoTestFailureException("The selected Windows configuration has no linker.");
+        return new WindowsCompilationLayout(includes, libraries, Path.GetDirectoryName(linker)!);
     }
-
-    private static string FindSdkVersionDirectoryName(SdkInstallation sdk)
-    {
-        if (sdk.Version is null)
-        {
-            throw new AutoTestFailureException("The selected Windows SDK has no version.");
-        }
-
-        string includeRoot = Path.Combine(sdk.RootPath, "Include");
-        try
-        {
-            return Directory.EnumerateDirectories(includeRoot)
-                .Select(Path.GetFileName)
-                .FirstOrDefault(name => Version.TryParse(name, out Version? version)
-                    && version == sdk.Version)
-                ?? throw new AutoTestFailureException(
-                    $"Windows SDK {sdk.Version} has no matching include directory.");
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            throw new AutoTestFailureException(
-                $"Windows SDK include directories could not be enumerated: {exception.Message}");
-        }
-    }
-
-    private static string SelectComponentPath(
-        Installation toolchain,
-        ComponentKind kind,
-        TargetArchitecture targetArchitecture)
-    {
-        TargetArchitecture hostArchitecture = GetCurrentArchitecture();
-        Component? component = toolchain.Components
-            .Where(candidate => candidate.Kind == kind)
-            .Where(candidate => CanRunHostComponent(candidate.HostArchitecture, hostArchitecture))
-            .Where(candidate => candidate.TargetArchitecture is TargetArchitecture.Unknown
-                || candidate.TargetArchitecture == targetArchitecture)
-            .OrderBy(candidate => candidate.TargetArchitecture == targetArchitecture ? 0 : 1)
-            .ThenBy(candidate => candidate.HostArchitecture == hostArchitecture ? 0 : 1)
-            .ThenBy(candidate => candidate.HostArchitecture == toolchain.HostArchitecture ? 0 : 1)
-            .FirstOrDefault();
-        return component?.Path
-            ?? throw new AutoTestFailureException(
-                $"The selected {toolchain.Kind} profile has no runnable {kind} component "
-                + $"for {targetArchitecture}.");
-    }
-
-    private static string SelectClangClPath(Installation toolchain)
-    {
-        string? compiler = toolchain.Components
-            .Where(component => component.Kind is
-                ComponentKind.Compiler or ComponentKind.CppCompiler)
-            .Select(component => component.Path)
-            .FirstOrDefault(path =>
-            {
-                string name = Path.GetFileNameWithoutExtension(path);
-                return name.Equals("clang-cl", StringComparison.OrdinalIgnoreCase)
-                    || name.StartsWith("clang-cl-", StringComparison.OrdinalIgnoreCase);
-            });
-        return compiler ?? throw new AutoTestFailureException(
-            "The selected LLVM installation does not expose clang-cl.exe.");
-    }
-
-    private static Installation SelectMsvcToolchain(
-        Catalog catalog,
-        TargetArchitecture targetArchitecture,
-        int? requiredProductMajor)
-    {
-        Installation? toolchain = catalog.Installations
-            .Where(candidate => candidate.Kind == Kind.VisualStudio)
-            .Where(candidate => candidate.TargetArchitectures.Contains(targetArchitecture))
-            .Where(candidate => requiredProductMajor is null
-                || candidate.ProductVersion?.Major == requiredProductMajor)
-            .OrderByDescending(candidate => candidate.ProductVersion)
-            .ThenByDescending(candidate => candidate.CompilerVersion)
-            .FirstOrDefault();
-        if (toolchain is not null)
-        {
-            return toolchain;
-        }
-
-        string versionRequirement = requiredProductMajor is int major
-            ? $" major version {major}"
-            : string.Empty;
-        throw new AutoTestFailureException(
-            $"clang-cl verification requires a Visual Studio{versionRequirement} toolset "
-            + $"that targets {targetArchitecture}.");
-    }
-
-    private static string FindRequiredSiblingExecutable(string executablePath, string siblingName)
-    {
-        string sibling = Path.Combine(Path.GetDirectoryName(executablePath)!, siblingName);
-        return File.Exists(sibling)
-            ? sibling
-            : throw new AutoTestFailureException(
-                $"The selected LLVM installation does not contain '{siblingName}'.");
-    }
-
-    private static bool CanRunHostComponent(
-        TargetArchitecture componentArchitecture,
-        TargetArchitecture hostArchitecture) =>
-        componentArchitecture is TargetArchitecture.Unknown
-        || componentArchitecture == hostArchitecture
-        || Platform.OSIsWindows
-            && hostArchitecture == TargetArchitecture.X64
-            && componentArchitecture == TargetArchitecture.X86
-        || Platform.OSIsWindows
-            && hostArchitecture == TargetArchitecture.ARM64
-            && componentArchitecture is TargetArchitecture.X64 or TargetArchitecture.X86
-        || Platform.OSIsOSX
-            && hostArchitecture == TargetArchitecture.ARM64
-            && componentArchitecture == TargetArchitecture.X64;
 
     private static ProcessOptions WithPath(ProcessOptions options, params string[] directories)
     {
@@ -712,7 +566,7 @@ internal static class ToolchainSmokeTester
 
     // Cross-compiled outputs still prove compile and link behavior; execution is added only when a runtime is available.
     private static ExecutionInvocation? CreateExecutionInvocation(
-        Profile profile,
+        SmokeConfiguration configuration,
         string outputPath,
         string workingDirectory)
     {
@@ -721,18 +575,18 @@ internal static class ToolchainSmokeTester
             WorkingDirectory = workingDirectory,
             Timeout = s_executionTimeout,
         };
-        if (CanRunNatively(profile))
+        if (CanRunNatively(configuration))
         {
             return new ExecutionInvocation(outputPath, [], options);
         }
 
-        if (profile.TargetPlatform == TargetPlatform.Emscripten)
+        if (configuration.TargetPlatform == TargetPlatform.Emscripten)
         {
             string? node = ResolveExecutable("node");
             return node is null ? null : new ExecutionInvocation(node, [outputPath], options);
         }
 
-        if (profile.TargetPlatform == TargetPlatform.Wasi)
+        if (configuration.TargetPlatform == TargetPlatform.Wasi)
         {
             string? wasmtime = ResolveExecutable("wasmtime");
             if (wasmtime is not null)
@@ -750,14 +604,14 @@ internal static class ToolchainSmokeTester
         return null;
     }
 
-    private static string GetExecutionSkipReason(Profile profile)
+    private static string GetExecutionSkipReason(SmokeConfiguration configuration)
     {
-        if (profile.TargetPlatform == TargetPlatform.Emscripten)
+        if (configuration.TargetPlatform == TargetPlatform.Emscripten)
         {
             return "Node.js was not found on PATH";
         }
 
-        if (profile.TargetPlatform == TargetPlatform.Wasi)
+        if (configuration.TargetPlatform == TargetPlatform.Wasi)
         {
             return "no WASI runtime was found on PATH";
         }
@@ -765,7 +619,7 @@ internal static class ToolchainSmokeTester
         return "the target cannot execute directly on this host";
     }
 
-    private static bool CanRunNatively(Profile profile)
+    private static bool CanRunNatively(SmokeConfiguration configuration)
     {
         TargetPlatform currentPlatform = Platform.OS switch
         {
@@ -775,11 +629,11 @@ internal static class ToolchainSmokeTester
             _ => TargetPlatform.Unknown,
         };
         TargetArchitecture currentArchitecture = GetCurrentArchitecture();
-        bool architectureCanRun = profile.TargetArchitecture == currentArchitecture
+        bool architectureCanRun = configuration.TargetArchitecture == currentArchitecture
             || Platform.OSIsWindows
                 && currentArchitecture == TargetArchitecture.X64
-                && profile.TargetArchitecture == TargetArchitecture.X86;
-        return profile.TargetPlatform == currentPlatform && architectureCanRun;
+                && configuration.TargetArchitecture == TargetArchitecture.X86;
+        return configuration.TargetPlatform == currentPlatform && architectureCanRun;
     }
 
     private static TargetArchitecture GetCurrentArchitecture() => Platform.Arch switch
@@ -790,49 +644,13 @@ internal static class ToolchainSmokeTester
         _ => TargetArchitecture.Unknown,
     };
 
-    private static string GetWindowsArchitectureName(TargetArchitecture architecture) =>
-        architecture switch
-        {
-            TargetArchitecture.X86 => "x86",
-            TargetArchitecture.X64 => "x64",
-            TargetArchitecture.ARM64 => "arm64",
-            _ => throw new AutoTestFailureException(
-                $"Windows smoke compilation does not support {architecture}."),
-        };
+    private static string CreateAppleSmokeTargetTriple(SmokeConfiguration configuration) =>
+        AutoTestDiscovery.AppleTargetTriple(configuration.Layout);
 
-    // Explicit deployment versions keep Apple cross-linking independent of ambient Xcode settings.
-    private static string CreateAppleSmokeTargetTriple(Profile profile)
-    {
-        string architecture = profile.TargetArchitecture switch
-        {
-            TargetArchitecture.X64 => "x86_64",
-            TargetArchitecture.ARM64 => "arm64",
-            _ => throw new AutoTestFailureException(
-                $"Apple smoke compilation does not support {profile.TargetArchitecture}."),
-        };
-        string platform = profile.TargetPlatform switch
-        {
-            TargetPlatform.MacOS when profile.TargetArchitecture == TargetArchitecture.X64 =>
-                "macos10.15",
-            TargetPlatform.MacOS => "macos11.0",
-            TargetPlatform.IOS => "ios13.0",
-            TargetPlatform.IOSSimulator => "ios14.0-simulator",
-            TargetPlatform.TvOS => "tvos13.0",
-            TargetPlatform.TvOSSimulator => "tvos14.0-simulator",
-            TargetPlatform.WatchOS => "watchos7.0",
-            TargetPlatform.WatchOSSimulator => "watchos7.0-simulator",
-            TargetPlatform.VisionOS => "xros1.0",
-            TargetPlatform.VisionOSSimulator => "xros1.0-simulator",
-            _ => throw new AutoTestFailureException(
-                $"{profile.TargetPlatform} is not an Apple smoke-test target."),
-        };
-        return $"{architecture}-apple-{platform}";
-    }
-
-    private static string GetOutputFileName(Profile profile, SmokeLanguage language)
+    private static string GetOutputFileName(SmokeConfiguration configuration, SmokeLanguage language)
     {
         string prefix = language == SmokeLanguage.C ? "hello-c" : "hello-cpp";
-        return profile.TargetPlatform switch
+        return configuration.TargetPlatform switch
         {
             TargetPlatform.Windows => prefix + ".exe",
             TargetPlatform.Emscripten => prefix + ".js",

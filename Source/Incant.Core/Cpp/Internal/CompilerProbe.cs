@@ -1,0 +1,352 @@
+using Incant.Base;
+using Incant.Core.Cpp.FindSdk;
+
+namespace Incant.Core.Cpp;
+
+/// <summary>One compiler identity and its read-only target queries. Each discovery opens a new instance.</summary>
+internal sealed class CompilerProbe
+{
+    private readonly DiscoveryContext _context;
+
+    private CompilerProbe(string path, string resolvedPath, DiscoveryContext context, string identityText, string? defaultTriple, Version? version)
+    {
+        Path = path;
+        ResolvedPath = resolvedPath;
+        Version = version;
+        _context = context;
+        IdentityText = identityText;
+        DefaultTarget = string.IsNullOrWhiteSpace(defaultTriple) ? null : new TargetIdentity(defaultTriple.Trim());
+    }
+
+    internal string Path { get; }
+
+    internal string ResolvedPath { get; }
+
+    internal string IdentityText { get; }
+
+    internal bool IsClang => IdentityText.Contains("clang", StringComparison.OrdinalIgnoreCase);
+
+    internal bool IsApple => IdentityText.Contains("Apple clang", StringComparison.OrdinalIgnoreCase);
+
+    internal TargetIdentity? DefaultTarget { get; }
+
+    internal Version? Version { get; }
+
+    internal string Prefix => System.IO.Path.GetDirectoryName(System.IO.Path.GetDirectoryName(ResolvedPath))!;
+
+    internal static async Task<CompilerProbe?> OpenAsync(string path, DiscoveryContext context, CancellationToken cancellationToken)
+    {
+        string resolvedPath = path;
+        if (OperatingSystem.IsMacOS())
+        {
+            AppleLocator.CompilerResolution resolution = await AppleLocator.ResolveCompilerAsync(path, context, cancellationToken).ConfigureAwait(false);
+            if (resolution.ResolvedCompilerPath is null)
+            {
+                return null;
+            }
+
+            resolvedPath = resolution.ResolvedCompilerPath;
+            if (resolution.DeveloperPath is not null)
+            {
+                var environment = new Dictionary<string, string?>(context.Environment, SearchPaths.Comparer);
+                foreach ((string name, string? value) in AppleLocator.Environment(resolution.DeveloperPath))
+                {
+                    environment[name] = value;
+                }
+
+                context = new DiscoveryContext(environment, context.ProbeTimeout);
+            }
+        }
+
+        ProcessResult? identity = await context.ProbeAsync(resolvedPath, ["--version"], cancellationToken).ConfigureAwait(false);
+        if (identity is null)
+        {
+            return null;
+        }
+
+        ProcessResult? machine = await context.ProbeAsync(resolvedPath, ["-dumpmachine"], cancellationToken).ConfigureAwait(false);
+        string text = identity.StandardOutput + identity.StandardError;
+        if (!text.Contains("clang", StringComparison.OrdinalIgnoreCase)
+            && !text.Contains("gcc", StringComparison.OrdinalIgnoreCase)
+            && !text.Contains("g++", StringComparison.OrdinalIgnoreCase)
+            && !text.Contains("Free Software Foundation", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        Version? version = SearchPaths.CompilerVersion(text);
+        if (!text.Contains("clang", StringComparison.OrdinalIgnoreCase))
+        {
+            ProcessResult? reportedVersion = await context.ProbeAsync(resolvedPath,
+                ["-dumpfullversion", "-dumpversion"], cancellationToken).ConfigureAwait(false);
+            version = SearchPaths.Version(reportedVersion?.StandardOutput) ?? version;
+        }
+
+        return new CompilerProbe(path, resolvedPath, context, text, machine?.StandardOutput.Trim(), version);
+    }
+
+    internal async Task<CompilerTargets> FindTargetsAsync(SdkQuery query, CancellationToken cancellationToken)
+    {
+        if (query.SysrootPath is not null && !Directory.Exists(query.SysrootPath))
+        {
+            throw new DiscoveryException($"The explicit sysroot '{query.SysrootPath}' does not exist.");
+        }
+
+        var diagnostics = new List<Diagnostic>();
+        var variants = new List<(string? Name, string[] Flags)>();
+        if (IsClang)
+        {
+            string[] flags = [];
+            if (query.TargetArchitecture == TargetArchitecture.X86 && query.TargetTriple is null
+                && DefaultTarget?.Architecture == TargetArchitecture.X64)
+            {
+                flags = ["-m32"];
+            }
+
+            variants.Add((query.Multilib, flags));
+        }
+        else
+        {
+            ProcessResult? reported = await _context.ProbeAsync(ResolvedPath, ["-print-multi-lib"], cancellationToken).ConfigureAwait(false);
+            foreach (string line in (reported?.StandardOutput ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                string[] parts = line.Split(';', 2);
+                if (parts.Length != 2)
+                {
+                    continue;
+                }
+
+                string[]? flags = parts[1] switch
+                {
+                    "" => [],
+                    "@m32" => ["-m32"],
+                    "@m64" => ["-m64"],
+                    "@mx32" => ["-mx32"],
+                    _ => null,
+                };
+                if (flags is not null)
+                {
+                    variants.Add((parts[0], flags));
+                }
+            }
+
+            if (variants.Count == 0)
+            {
+                variants.Add((".", []));
+            }
+        }
+
+        Task<CompilerTarget?>[] tasks = variants
+            .Where(variant => query.Multilib is null || IsClang || variant.Name == query.Multilib)
+            .Select(variant => InspectTargetAsync(query, variant.Name, variant.Flags, cancellationToken)).ToArray();
+        CompilerTarget?[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        CompilerTarget[] targets = results.OfType<CompilerTarget>().ToArray();
+        if (targets.Length == 0)
+        {
+            diagnostics.Add(Missing("The requested target or multilib could not be established from this compiler.", Path));
+        }
+
+        return new CompilerTargets(targets, diagnostics);
+    }
+
+    private async Task<CompilerTarget?> InspectTargetAsync(
+        SdkQuery query, string? multilib, string[] variantFlags, CancellationToken cancellationToken)
+    {
+        var arguments = new List<string>(variantFlags);
+        if (IsClang && query.TargetTriple is not null)
+        {
+            arguments.Add("--target=" + query.TargetTriple);
+        }
+
+        TargetPlatform platform = SearchPaths.Platform(query.TargetTriple ?? DefaultTarget?.Triple);
+        if (query.SysrootPath is not null)
+        {
+            if (platform is TargetPlatform.MacOS or TargetPlatform.IOS or TargetPlatform.IOSSimulator
+                or TargetPlatform.TvOS or TargetPlatform.TvOSSimulator or TargetPlatform.WatchOS
+                or TargetPlatform.WatchOSSimulator or TargetPlatform.VisionOS or TargetPlatform.VisionOSSimulator)
+            {
+                arguments.AddRange(["-isysroot", query.SysrootPath]);
+            }
+            else
+            {
+                arguments.Add("--sysroot=" + query.SysrootPath);
+            }
+        }
+
+        async Task<ProcessResult?> ProbeAsync(params string[] flags) =>
+            await _context.ProbeAsync(ResolvedPath, arguments.Concat(flags).ToArray(), cancellationToken).ConfigureAwait(false);
+
+        ProcessResult? macros = await ProbeAsync("-dM", "-E", "-x", "c", NullInput).ConfigureAwait(false);
+        TargetArchitecture architecture = MacroArchitecture(macros?.StandardOutput);
+        bool isX32 = architecture == TargetArchitecture.X64
+            && (macros?.StandardOutput.Contains("#define __ILP32__", StringComparison.Ordinal) ?? false);
+        string? triple = IsClang
+            ? (await ProbeAsync("-print-target-triple").ConfigureAwait(false))?.StandardOutput.Trim()
+            : DefaultTarget?.Triple;
+        if (string.IsNullOrWhiteSpace(triple))
+        {
+            triple = IsClang && macros is not null ? query.TargetTriple ?? DefaultTarget?.Triple : DefaultTarget?.Triple;
+        }
+
+        if (triple is null)
+        {
+            return null;
+        }
+
+        var target = new TargetIdentity(triple);
+        if (architecture != TargetArchitecture.Unknown)
+        {
+            target = target.WithArchitecture(architecture, isX32);
+        }
+        else if (variantFlags.Length > 0 || IsClang && query.TargetTriple is not null
+            && !TargetIdentity.AreEquivalent(query.TargetTriple, DefaultTarget?.Triple))
+        {
+            return null;
+        }
+
+        if (query.TargetArchitecture is not null && query.TargetArchitecture != target.Architecture
+            || query.TargetPlatform is not null && query.TargetPlatform != target.Platform
+            || query.TargetTriple is not null && !TargetIdentity.AreEquivalent(query.TargetTriple, target.Triple))
+        {
+            return null;
+        }
+
+        string? multiarch = (await ProbeAsync("-print-multiarch").ConfigureAwait(false))?.StandardOutput.Trim();
+        if (!IsSimpleDirectory(multiarch) || !target.HasSameAbi(new TargetIdentity(multiarch!)))
+        {
+            multiarch = null;
+        }
+
+        string? reportedMultilib = (await ProbeAsync("-print-multi-directory").ConfigureAwait(false))?.StandardOutput.Trim();
+        if (IsClang)
+        {
+            if (query.Multilib is not null && query.Multilib != reportedMultilib)
+            {
+                return null;
+            }
+
+            multilib = string.IsNullOrWhiteSpace(reportedMultilib) ? null : reportedMultilib;
+        }
+
+        string? sysroot = query.SysrootPath
+            ?? (await ProbeAsync("-print-sysroot").ConfigureAwait(false))?.StandardOutput.Trim();
+        if (string.IsNullOrWhiteSpace(sysroot))
+        {
+            sysroot = null;
+        }
+        else if (!System.IO.Path.IsPathFullyQualified(sysroot))
+        {
+            sysroot = null;
+        }
+
+        var diagnostics = new List<Diagnostic>();
+        if (macros is null)
+        {
+            diagnostics.Add(Missing("The target preprocessor query failed.", Path));
+        }
+
+        var includes = new List<CompilerInclude>();
+        foreach (string language in new[] { "c", "c++" })
+        {
+            ProcessResult? search = await ProbeAsync("-E", "-x", language, "-v", NullInput).ConfigureAwait(false);
+            bool isInSearch = false;
+            int startCount = includes.Count;
+            foreach (string line in (search?.StandardError + search?.StandardOutput).Split('\n'))
+            {
+                string value = line.Trim();
+                if (value.Contains("search starts here:", StringComparison.Ordinal))
+                {
+                    isInSearch = true;
+                }
+                else if (value.StartsWith("End of search list.", StringComparison.Ordinal))
+                {
+                    isInSearch = false;
+                }
+                else if (isInSearch)
+                {
+                    bool isFramework = value.EndsWith(" (framework directory)", StringComparison.Ordinal);
+                    string path = value.Replace(" (framework directory)", "", StringComparison.Ordinal);
+                    if (System.IO.Path.IsPathFullyQualified(path) && Directory.Exists(path))
+                    {
+                        includes.Add(new CompilerInclude(SearchPaths.Normalize(path),
+                            isFramework ? ResourcePurpose.Framework : language == "c" ? ResourcePurpose.CInclude : ResourcePurpose.CppInclude));
+                    }
+                }
+            }
+
+            if (includes.Count == startCount)
+            {
+                diagnostics.Add(Missing($"No {language} header search paths were reported.", Path));
+            }
+        }
+
+        ProcessResult? searchDirectories = await ProbeAsync("-print-search-dirs").ConfigureAwait(false);
+        string? libraries = searchDirectories?.StandardOutput.Split('\n')
+            .FirstOrDefault(line => line.StartsWith("libraries:", StringComparison.Ordinal));
+        string[] directories = libraries is null ? [] : libraries["libraries:".Length..].Trim().TrimStart('=')
+            .Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(System.IO.Path.IsPathFullyQualified).Where(Directory.Exists).Select(SearchPaths.Normalize)
+            .Distinct(SearchPaths.Comparer).ToArray();
+
+        string? resource = IsClang
+            ? (await ProbeAsync("-print-resource-dir").ConfigureAwait(false))?.StandardOutput.Trim()
+            : (await ProbeAsync("-print-file-name=include").ConfigureAwait(false))?.StandardOutput.Trim();
+        if (resource is not null && (!System.IO.Path.IsPathFullyQualified(resource) || !Directory.Exists(resource)))
+        {
+            resource = null;
+        }
+
+        return new CompilerTarget(this, target, arguments.ToArray(), multilib, multiarch, sysroot,
+            resource, includes, directories, diagnostics);
+    }
+
+    internal Task<ProcessResult?> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken) =>
+        _context.ProbeAsync(ResolvedPath, arguments, cancellationToken);
+
+    internal static string NullInput => OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+
+    private static bool IsSimpleDirectory(string? value) => !string.IsNullOrWhiteSpace(value)
+        && value.IndexOfAny(['/', '\\', '\r', '\n']) < 0 && value is not "." and not "..";
+
+    private static TargetArchitecture MacroArchitecture(string? macros)
+    {
+        string value = macros ?? "";
+        return value.Contains("#define __x86_64__", StringComparison.Ordinal) ? TargetArchitecture.X64
+            : value.Contains("#define __i386__", StringComparison.Ordinal) ? TargetArchitecture.X86
+            : value.Contains("#define __aarch64__", StringComparison.Ordinal) ? TargetArchitecture.ARM64
+            : value.Contains("#define __arm__", StringComparison.Ordinal) ? TargetArchitecture.ARM
+            : value.Contains("#define __wasm32__", StringComparison.Ordinal) ? TargetArchitecture.Wasm32
+            : TargetArchitecture.Unknown;
+    }
+
+    internal static Diagnostic Missing(string message, string path) =>
+        new(DiagnosticSeverity.Warning, "target-probe", "Compiler target", message, path);
+}
+
+internal sealed record CompilerInclude(string Path, ResourcePurpose Purpose);
+
+internal sealed record CompilerTargets(IReadOnlyList<CompilerTarget> Targets, IReadOnlyList<Diagnostic> Diagnostics);
+
+internal sealed record CompilerTarget(
+    CompilerProbe Compiler,
+    TargetIdentity Identity,
+    IReadOnlyList<string> Arguments,
+    string? Multilib,
+    string? Multiarch,
+    string? Sysroot,
+    string? ResourceDirectory,
+    IReadOnlyList<CompilerInclude> Includes,
+    IReadOnlyList<string> LibraryDirectories,
+    IReadOnlyList<Diagnostic> Diagnostics)
+{
+    internal Task<ProcessResult?> ProbeAsync(string argument, CancellationToken cancellationToken) =>
+        Compiler.RunAsync(Arguments.Append(argument).ToArray(), cancellationToken);
+
+    internal async Task<string?> FindFileAsync(string name, CancellationToken cancellationToken)
+    {
+        ProcessResult? result = await ProbeAsync("-print-file-name=" + name, cancellationToken).ConfigureAwait(false);
+        string? path = result?.StandardOutput.Trim();
+        return path is not null && System.IO.Path.IsPathFullyQualified(path) && File.Exists(path)
+            ? SearchPaths.Normalize(path) : null;
+    }
+}
