@@ -22,7 +22,7 @@ internal static class ToolchainResolution
         SdkKind kind,
         TargetPlatform platform,
         TargetArchitecture architecture,
-        string triple,
+        string? triple,
         string? multilib,
         string? sysrootPath,
         CancellationToken cancellationToken)
@@ -43,7 +43,15 @@ internal static class ToolchainResolution
         query = owner.Requirement.SdkVersion?.Apply(query) ?? query;
         DiscoveryProbe probe = await DiscoveryStage.RunSdkProbeAsync(
             context,
-            $"{owner.Requirement.Id}/resolve/{platform}/{architecture}/{multilib}",
+            CreateId(
+                owner.Requirement.Id,
+                "resolve",
+                toolSet.Kind,
+                toolSet.Version,
+                toolSet.CompilerVersion,
+                platform,
+                architecture,
+                multilib ?? "default"),
             "resolve target-specific compiler SDK",
             SdkFinder.CreateDefault(),
             query,

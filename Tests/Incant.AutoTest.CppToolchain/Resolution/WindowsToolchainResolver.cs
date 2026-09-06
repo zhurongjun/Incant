@@ -1,6 +1,7 @@
 using Incant.Base;
 using Incant.Core.Cpp;
 using static Incant.AutoTest.CppToolchain.ToolchainResolution;
+using ResourcePurpose = Incant.Core.Cpp.FindSdk.ResourcePurpose;
 using Sdk = Incant.Core.Cpp.FindSdk.Sdk;
 using SdkFinder = Incant.Core.Cpp.FindSdk.Finder;
 using SdkKind = Incant.Core.Cpp.FindSdk.Kind;
@@ -55,6 +56,8 @@ internal static class WindowsToolchainResolver
             return;
         }
 
+        var compilerSdks =
+            new Dictionary<(ToolSet ToolSet, TargetArchitecture Architecture), Sdk?>();
         foreach (ToolSetOwner toolSet in toolSets)
         {
             Sdk? msvcSdk = FindMsvcSdk(toolSet.ToolSet, toolSet.Owner.Sdks);
@@ -65,10 +68,20 @@ internal static class WindowsToolchainResolver
                     ? msvcSdk.Layouts
                         .Where(layout => layout.Platform == TargetPlatform.Windows
                             && layout.Architecture != TargetArchitecture.Unknown
+                            && IsCompleteLayout(
+                                msvcSdk,
+                                layout,
+                                ResourcePurpose.CppInclude,
+                                ResourcePurpose.Library)
                             && FindLayout(
                                 highestWindowsSdk.Sdk,
                                 TargetPlatform.Windows,
-                                layout.Architecture) is not null)
+                                layout.Architecture) is TargetLayout windowsLayout
+                            && IsCompleteLayout(
+                                highestWindowsSdk.Sdk,
+                                windowsLayout,
+                                ResourcePurpose.CInclude,
+                                ResourcePurpose.Library))
                         .Select(layout => layout.Architecture)
                         .Distinct()
                         .Order()
@@ -89,14 +102,12 @@ internal static class WindowsToolchainResolver
                 await AddWindowsMsvcCandidateAsync(
                     context,
                     toolSet,
-                    msvcSdk,
                     highestWindowsSdk,
                     architecture,
+                    compilerSdks,
                     cancellationToken).ConfigureAwait(false);
             }
         }
-        Sdk? highestMsvcSdk = FindMsvcSdk(
-            highestToolSet.ToolSet, highestToolSet.Owner.Sdks);
         foreach (SdkOwner windowsSdk in windowsSdks)
         {
             foreach (TargetArchitecture architecture in context.Profile.WindowsMsvcArchitectures)
@@ -104,9 +115,9 @@ internal static class WindowsToolchainResolver
                 await AddWindowsMsvcCandidateAsync(
                     context,
                     highestToolSet,
-                    highestMsvcSdk,
                     windowsSdk,
                     architecture,
+                    compilerSdks,
                     cancellationToken).ConfigureAwait(false);
             }
         }
@@ -115,9 +126,9 @@ internal static class WindowsToolchainResolver
     private static async Task AddWindowsMsvcCandidateAsync(
         AutoTestContext context,
         ToolSetOwner toolSetOwner,
-        Sdk? msvcSdk,
         SdkOwner windowsSdkOwner,
         TargetArchitecture architecture,
+        Dictionary<(ToolSet ToolSet, TargetArchitecture Architecture), Sdk?> compilerSdks,
         CancellationToken cancellationToken)
     {
         ToolSet toolSet = toolSetOwner.ToolSet;
@@ -135,6 +146,23 @@ internal static class WindowsToolchainResolver
             id,
             [toolSetOwner.Owner.Requirement.Id, windowsSdkOwner.Owner.Requirement.Id]);
         context.Candidates.Add(candidate);
+        var compilerSdkKey = (toolSet, architecture);
+        if (!compilerSdks.TryGetValue(compilerSdkKey, out Sdk? msvcSdk))
+        {
+            msvcSdk = await FindCompilerSdkAsync(
+                context,
+                toolSetOwner.Owner,
+                toolSet,
+                SdkKind.Msvc,
+                TargetPlatform.Windows,
+                architecture,
+                triple: null,
+                multilib: null,
+                sysrootPath: null,
+                cancellationToken).ConfigureAwait(false);
+            compilerSdks.Add(compilerSdkKey, msvcSdk);
+        }
+
         if (msvcSdk is null)
         {
             candidate.Invalidate("No MSVC development SDK belongs to this ToolSet.");
@@ -203,6 +231,16 @@ internal static class WindowsToolchainResolver
             "Paired one concrete MSVC ToolSet with the selected Windows SDK before building.");
         candidate.Status = CandidateStatus.Resolved;
     }
+
+    private static bool IsCompleteLayout(
+        Sdk sdk,
+        TargetLayout layout,
+        params ResourcePurpose[] requiredResources) =>
+        !sdk.Diagnostics.Concat(layout.Diagnostics).Any(
+            diagnostic => diagnostic.Severity == DiagnosticSeverity.Error
+                || diagnostic.Code == "missing-resource")
+        && requiredResources.All(required => layout.Resources.Any(
+            resource => resource.Purpose == required));
 
     private static async Task ResolveWindowsLlvmAsync(
         AutoTestContext context,

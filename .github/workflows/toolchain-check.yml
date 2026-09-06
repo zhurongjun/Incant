@@ -3,10 +3,10 @@ name: toolchain-check
 on:
   push:
     branches:
-      - '**'
+      - "**"
   pull_request:
     branches:
-      - '**'
+      - "**"
   workflow_dispatch:
   workflow_call:
 
@@ -55,8 +55,10 @@ jobs:
           profile: ${{ matrix.profile }}
 
       - name: Run ${{ matrix.profile }}
-        shell: pwsh
-        run: Incant.AutoTest.CppToolchain ${{ matrix.profile }}
+        shell: bash
+        env:
+          INCANT_AUTOTEST_PROFILE: ${{ matrix.profile }}
+        run: Incant.AutoTest.CppToolchain "$INCANT_AUTOTEST_PROFILE"
 
       - name: Upload report
         if: always()
@@ -64,6 +66,8 @@ jobs:
         with:
           name: toolchain-${{ matrix.profile }}
           path: |
+            build/toolchain-environments/${{ matrix.profile }}.json
+            build/toolchain-environments/${{ matrix.profile }}.setup.json
             build/toolchain-reports/${{ matrix.profile }}.json
             build/toolchain-autotest/${{ matrix.profile }}/logs
           if-no-files-found: warn
