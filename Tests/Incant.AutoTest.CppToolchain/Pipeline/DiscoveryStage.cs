@@ -74,46 +74,21 @@ internal static class DiscoveryStage
         ToolKind? toolKind = GetToolKind(discovery.Requirement.Kind);
         if (toolKind is ToolKind concreteToolKind)
         {
-            DiscoveryProbe automaticToolSets = await RunToolProbeAsync(
-                context,
-                discovery.Requirement.Id + "/toolsets/automatic",
-                "unconstrained with the installation environment",
-                toolFinder,
-                new ToolSetQuery
-                {
-                    IncludePreview = true,
-                    Environment = environment,
-                },
-                cancellationToken).ConfigureAwait(false);
             await DiscoverToolSetsAsync(
                 context,
                 discovery,
                 toolFinder,
-                automaticToolSets,
                 concreteToolKind,
                 environment,
                 cancellationToken).ConfigureAwait(false);
         }
 
-        IReadOnlyList<SdkKind> sdkKinds = GetSdkKinds(discovery.Requirement.Kind);
-        DiscoveryProbe automaticSdks = await RunSdkProbeAsync(
-            context,
-            discovery.Requirement.Id + "/sdks/automatic",
-            "unconstrained with the installation environment",
-            sdkFinder,
-            new SdkQuery
-            {
-                IncludePreview = true,
-                Environment = environment,
-            },
-            cancellationToken).ConfigureAwait(false);
-        foreach (SdkKind sdkKind in sdkKinds)
+        foreach (SdkKind sdkKind in GetSdkKinds(discovery.Requirement.Kind))
         {
             await DiscoverSdksAsync(
                 context,
                 discovery,
                 sdkFinder,
-                automaticSdks,
                 sdkKind,
                 environment,
                 cancellationToken).ConfigureAwait(false);
@@ -133,7 +108,6 @@ internal static class DiscoveryStage
         AutoTestContext context,
         InstallationDiscovery discovery,
         ToolFinder finder,
-        DiscoveryProbe automaticProbe,
         ToolKind kind,
         IReadOnlyDictionary<string, string?> environment,
         CancellationToken cancellationToken)
@@ -145,9 +119,13 @@ internal static class DiscoveryStage
             IncludePreview = true,
             Environment = environment,
         };
-        DiscoveryProbe kindProbe = await RunToolProbeAsync(
-            context, prefix + "/kind", kind.ToString(), finder, kindQuery, cancellationToken)
-            .ConfigureAwait(false);
+        DiscoveryProbe automaticProbe = await RunToolProbeAsync(
+            context,
+            prefix + "/automatic",
+            $"kind {kind} with the installation environment",
+            finder,
+            kindQuery,
+            cancellationToken).ConfigureAwait(false);
 
         VersionRule manifestVersion = ExactManifestVersion(
             discovery.Requirement.ToolVersion, discovery.Manifest.Version);
@@ -179,12 +157,6 @@ internal static class DiscoveryStage
                 && (discovery.Requirement.ToolVersion is null
                     || discovery.Requirement.ToolVersion.Matches(toolSet)))
             .ToArray();
-        ToolSet[] kindMatches = kindProbe.ToolSets
-            .Where(toolSet => Related(discovery.Manifest.RootPath, toolSet)
-                && manifestVersion.Matches(toolSet)
-                && (discovery.Requirement.ToolVersion is null
-                    || discovery.Requirement.ToolVersion.Matches(toolSet)))
-            .ToArray();
         ToolSet[] versionMatches = versionProbe.ToolSets
             .Where(toolSet => Related(discovery.Manifest.RootPath, toolSet)
                 && (discovery.Requirement.ToolVersion is null
@@ -197,11 +169,6 @@ internal static class DiscoveryStage
             explicitMatches.Select(ToolIdentity),
             discovery,
             "ToolSet automatic query");
-        CompareIdentities(
-            kindMatches.Select(ToolIdentity),
-            explicitMatches.Select(ToolIdentity),
-            discovery,
-            "ToolSet kind query");
         CompareIdentities(
             versionMatches.Select(ToolIdentity),
             explicitMatches.Select(ToolIdentity),
@@ -234,7 +201,6 @@ internal static class DiscoveryStage
         }
 
         if (!automaticProbe.Completed
-            || !kindProbe.Completed
             || !versionProbe.Completed
             || !explicitProbe.Succeeded
             || !missingPathProbe.Succeeded
@@ -248,7 +214,6 @@ internal static class DiscoveryStage
         AutoTestContext context,
         InstallationDiscovery discovery,
         SdkFinder finder,
-        DiscoveryProbe automaticProbe,
         SdkKind kind,
         IReadOnlyDictionary<string, string?> environment,
         CancellationToken cancellationToken)
@@ -260,9 +225,13 @@ internal static class DiscoveryStage
             IncludePreview = true,
             Environment = environment,
         };
-        DiscoveryProbe kindProbe = await RunSdkProbeAsync(
-            context, prefix + "/kind", kind.ToString(), finder, kindQuery, cancellationToken)
-            .ConfigureAwait(false);
+        DiscoveryProbe automaticProbe = await RunSdkProbeAsync(
+            context,
+            prefix + "/automatic",
+            $"kind {kind} with the installation environment",
+            finder,
+            kindQuery,
+            cancellationToken).ConfigureAwait(false);
 
         VersionRule manifestVersion = ExactManifestVersion(
             discovery.Requirement.SdkVersion, discovery.Manifest.Version);
@@ -293,11 +262,6 @@ internal static class DiscoveryStage
                 && SdkVersionMatches(manifestVersion, sdk)
                 && SdkVersionMatches(discovery.Requirement.SdkVersion, sdk))
             .ToArray();
-        Sdk[] kindMatches = kindProbe.Sdks
-            .Where(sdk => Related(discovery.Manifest.RootPath, sdk)
-                && SdkVersionMatches(manifestVersion, sdk)
-                && SdkVersionMatches(discovery.Requirement.SdkVersion, sdk))
-            .ToArray();
         Sdk[] versionMatches = versionProbe.Sdks
             .Where(sdk => Related(discovery.Manifest.RootPath, sdk)
                 && SdkVersionMatches(discovery.Requirement.SdkVersion, sdk))
@@ -314,11 +278,6 @@ internal static class DiscoveryStage
             explicitMatches.Select(SdkIdentity),
             discovery,
             $"SDK {kind} automatic query");
-        CompareIdentities(
-            kindMatches.Select(SdkIdentity),
-            explicitMatches.Select(SdkIdentity),
-            discovery,
-            $"SDK {kind} kind query");
         CompareIdentities(
             versionMatches.Select(SdkIdentity),
             explicitMatches.Select(SdkIdentity),
@@ -363,7 +322,6 @@ internal static class DiscoveryStage
         }
 
         if (!automaticProbe.Completed
-            || !kindProbe.Completed
             || !versionProbe.Completed
             || !explicitProbe.Succeeded
             || !missingPathProbe.Succeeded
@@ -397,7 +355,7 @@ internal static class DiscoveryStage
                 diagnostic => diagnostic.Severity != DiagnosticSeverity.Error);
             probe.Sdks = result.Sdks;
             probe.Diagnostics = result.Diagnostics;
-            context.Diagnostics.AddRange(result.Diagnostics);
+            context.AddDiagnostics(result.Diagnostics);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -430,7 +388,7 @@ internal static class DiscoveryStage
                 diagnostic => diagnostic.Severity != DiagnosticSeverity.Error);
             probe.ToolSets = result.ToolSets;
             probe.Diagnostics = result.Diagnostics;
-            context.Diagnostics.AddRange(result.Diagnostics);
+            context.AddDiagnostics(result.Diagnostics);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -507,12 +465,12 @@ internal static class DiscoveryStage
     }
 
     private static void CompareIdentities(
-        IEnumerable<string> automatic,
+        IEnumerable<string> broadResults,
         IEnumerable<string> explicitResults,
         InstallationDiscovery discovery,
         string subject)
     {
-        string[] automaticKeys = automatic
+        string[] broadKeys = broadResults
             .Distinct(StringComparer.Ordinal)
             .OrderBy(key => key, StringComparer.Ordinal)
             .ToArray();
@@ -520,15 +478,21 @@ internal static class DiscoveryStage
             .Distinct(StringComparer.Ordinal)
             .OrderBy(key => key, StringComparer.Ordinal)
             .ToArray();
-        if (!automaticKeys.SequenceEqual(explicitKeys, StringComparer.Ordinal))
+        int missingCount = explicitKeys.Except(
+            broadKeys, StringComparer.Ordinal).Count();
+        if (missingCount > 0)
         {
             discovery.Failures.Add(
-                $"{subject} and explicit-root discovery returned different identities.");
+                $"{subject} omitted {missingCount} identity or identities confirmed "
+                + "by explicit-root discovery.");
             return;
         }
 
+        int additionalCount = broadKeys.Except(
+            explicitKeys, StringComparer.Ordinal).Count();
         discovery.Decisions.Add(
-            $"{subject} identity is consistent with explicit-root discovery.");
+            $"{subject} contains all {explicitKeys.Length} explicit-root identities; "
+            + $"additional identities: {additionalCount}.");
     }
 
     private static bool SdkVersionMatches(VersionRule? rule, Sdk sdk)
@@ -547,22 +511,22 @@ internal static class DiscoveryStage
     private static string ToolIdentity(ToolSet toolSet) => string.Join(
         "|",
         toolSet.Kind,
-        Normalize(toolSet.RootPath),
-        Normalize(toolSet.EnvironmentPath),
-        toolSet.CompilerPath is null ? string.Empty : Normalize(toolSet.CompilerPath),
+        PathIdentity.Normalize(toolSet.RootPath),
+        PathIdentity.Normalize(toolSet.EnvironmentPath),
+        toolSet.CompilerPath is null ? string.Empty : PathIdentity.Normalize(toolSet.CompilerPath),
         toolSet.Version,
         toolSet.ProductVersion,
         toolSet.CompilerVersion,
-        toolSet.DefaultTargetTriple,
+        CanonicalTriple(toolSet.DefaultTargetTriple),
         toolSet.Channel);
 
     private static string SdkIdentity(Sdk sdk) =>
         string.Join(
             "|",
             sdk.Kind,
-            Normalize(sdk.RootPath),
-            Normalize(sdk.EnvironmentPath),
-            sdk.CompilerPath is null ? string.Empty : Normalize(sdk.CompilerPath),
+            PathIdentity.Normalize(sdk.RootPath),
+            PathIdentity.Normalize(sdk.EnvironmentPath),
+            sdk.CompilerPath is null ? string.Empty : PathIdentity.Normalize(sdk.CompilerPath),
             sdk.Version,
             sdk.ProductVersion,
             sdk.Channel,
@@ -574,8 +538,8 @@ internal static class DiscoveryStage
         "/",
         layout.Platform,
         layout.Architecture,
-        layout.TargetTriple,
-        layout.SysrootPath is null ? string.Empty : Normalize(layout.SysrootPath),
+        CanonicalTriple(layout.TargetTriple),
+        layout.SysrootPath is null ? string.Empty : PathIdentity.Normalize(layout.SysrootPath),
         layout.Multilib,
         layout.MinimumDeploymentVersion,
         layout.DefaultDeploymentVersion,
@@ -587,10 +551,15 @@ internal static class DiscoveryStage
     private static string ResourceIdentity(Resource resource) => string.Join(
         ":",
         resource.Purpose,
-        Normalize(resource.Path),
+        PathIdentity.Normalize(resource.Path),
         resource.IsExternal,
         resource.ApiLevel,
         resource.IsDirectory);
+
+    private static string CanonicalTriple(string? triple) =>
+        string.IsNullOrWhiteSpace(triple)
+            ? string.Empty
+            : TargetTripleIdentity.Canonicalize(triple);
 
     private static bool Related(string root, ToolSet toolSet) =>
         Related(root, toolSet.RootPath)
@@ -602,22 +571,8 @@ internal static class DiscoveryStage
         || Related(root, sdk.EnvironmentPath)
         || sdk.CompilerPath is not null && Related(root, sdk.CompilerPath);
 
-    private static bool Related(string left, string right)
-    {
-        string normalizedLeft = Normalize(left);
-        string normalizedRight = Normalize(right);
-        StringComparison comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        return string.Equals(normalizedLeft, normalizedRight, comparison)
-            || normalizedLeft.StartsWith(
-                normalizedRight + Path.DirectorySeparatorChar, comparison)
-            || normalizedRight.StartsWith(
-                normalizedLeft + Path.DirectorySeparatorChar, comparison);
-    }
-
-    private static string Normalize(string path) =>
-        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+    private static bool Related(string left, string right) =>
+        PathIdentity.Related(left, right);
 
     private static VersionRule ExactManifestVersion(VersionRule? profileRule, string value) =>
         new(

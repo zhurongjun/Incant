@@ -31,6 +31,7 @@ internal sealed partial class AndroidNdkComponent(AndroidRelease release) : ISet
             $"https://dl.google.com/android/repository/android-ndk-{release.Release}-{platform}.zip";
         string archive = await context.Downloads.GetAsync(
             uri, release.Sha256, cancellationToken).ConfigureAwait(false);
+        string bin = Path.Combine("toolchains", "llvm", "prebuilt", hostTag, "bin");
         string root = await context.Archives.InstallAsync(
             release.Id,
             archive,
@@ -38,13 +39,25 @@ internal sealed partial class AndroidNdkComponent(AndroidRelease release) : ISet
             [
                 new("source.properties", ProbeKind.File),
                 new(
-                    Path.Combine(
-                        "toolchains", "llvm", "prebuilt", hostTag, "bin", $"clang{suffix}"),
-                    ProbeKind.File),
+                    Path.Combine(bin, $"clang{suffix}"),
+                    ProbeKind.Executable,
+                    ["--version"]),
                 new(
-                    Path.Combine(
-                        "toolchains", "llvm", "prebuilt", hostTag, "bin", $"llvm-ar{suffix}"),
-                    ProbeKind.File),
+                    Path.Combine(bin, $"clang++{suffix}"),
+                    ProbeKind.Executable,
+                    ["--version"]),
+                new(
+                    Path.Combine(bin, $"llvm-ar{suffix}"),
+                    ProbeKind.Executable,
+                    ["--version"]),
+                new(
+                    Path.Combine(bin, $"llvm-ranlib{suffix}"),
+                    ProbeKind.Executable,
+                    ["--version"]),
+                new(
+                    Path.Combine(bin, $"ld.lld{suffix}"),
+                    ProbeKind.Executable,
+                    ["--version"]),
                 new(
                     Path.Combine(
                         "toolchains",

@@ -5,6 +5,8 @@ namespace Incant.AutoTest.CppToolchain;
 
 internal sealed class AutoTestContext(AutoTestOptions options)
 {
+    private readonly HashSet<Diagnostic> _diagnostics = [];
+
     internal AutoTestOptions Options { get; } = options;
 
     internal EnvironmentProfile Profile => Options.Profile;
@@ -48,6 +50,18 @@ internal sealed class AutoTestContext(AutoTestOptions options)
     internal void RecordCancellation()
     {
         ExitCode = 130;
+    }
+
+    internal void AddDiagnostics(IEnumerable<Diagnostic> diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        foreach (Diagnostic diagnostic in diagnostics)
+        {
+            if (_diagnostics.Add(diagnostic))
+            {
+                Diagnostics.Add(diagnostic);
+            }
+        }
     }
 
     internal IReadOnlyDictionary<string, string?> EnvironmentFor(InstallationManifest? installation)

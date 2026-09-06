@@ -19,6 +19,7 @@ internal sealed class SetupContext
         Options = options;
         Paths = new SetupPathGuard(options.ToolchainRoot);
         Commands = new SetupCommandRunner(this);
+        Probes = new InstallationProbeVerifier(Commands);
         Downloads = new DownloadCache(this);
         Archives = new ArchiveInstaller(this);
     }
@@ -30,6 +31,8 @@ internal sealed class SetupContext
     internal SetupPathGuard Paths { get; }
 
     internal SetupCommandRunner Commands { get; }
+
+    internal InstallationProbeVerifier Probes { get; }
 
     internal DownloadCache Downloads { get; }
 

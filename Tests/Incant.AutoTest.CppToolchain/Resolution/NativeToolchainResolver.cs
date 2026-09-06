@@ -216,10 +216,10 @@ internal static class NativeToolchainResolver
                                 : [ToolNames.LlvmRanlib, ToolNames.Ranlib],
                             query,
                             cancellationToken).ConfigureAwait(false);
-                        Tool? linker = await FindToolAsync(
+                        Tool? linker = await FindLinkerAsync(
                             candidate,
-                            auxiliaryToolSet ?? toolSet,
-                            ToolNames.Ld,
+                            toolSet,
+                            auxiliaryToolSet,
                             query,
                             cancellationToken).ConfigureAwait(false);
                         if (!RequireTools(
@@ -277,6 +277,38 @@ internal static class NativeToolchainResolver
                 }
             }
         }
+    }
+
+    private static Task<Tool?> FindLinkerAsync(
+        ToolchainCandidate candidate,
+        ToolSet toolSet,
+        ToolSet? auxiliaryToolSet,
+        ToolQuery query,
+        CancellationToken cancellationToken)
+    {
+        if (auxiliaryToolSet is not null)
+        {
+            return FindToolAsync(
+                candidate,
+                auxiliaryToolSet,
+                ToolNames.Ld,
+                query,
+                cancellationToken);
+        }
+
+        return toolSet.Kind == ToolKind.Gnu
+            ? FindToolAsync(
+                candidate,
+                toolSet,
+                ToolNames.Ld,
+                query,
+                cancellationToken)
+            : FindAnyToolAsync(
+                candidate,
+                toolSet,
+                [ToolNames.LdLld, ToolNames.Ld],
+                query,
+                cancellationToken);
     }
 
     private static bool IsRequestedLayout(

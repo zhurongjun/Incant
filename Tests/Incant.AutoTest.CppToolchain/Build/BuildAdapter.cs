@@ -1,5 +1,4 @@
 using Incant.Core.Cpp;
-using Incant.Core.Cpp.FindSdk;
 
 namespace Incant.AutoTest.CppToolchain;
 
@@ -199,19 +198,14 @@ internal abstract class BuildAdapter
         }
 
         arguments.AddRange(["-I", FixturePaths.Root]);
-        IEnumerable<Resource> includes = toolchain.Resources.Where(resource =>
-            resource.Purpose == ResourcePurpose.CInclude
-            || cpp && resource.Purpose == ResourcePurpose.CppInclude);
-        foreach (string directory in includes.Select(resource => resource.Path)
-            .Distinct(PathComparer))
+        foreach (string directory in DriverResourceArguments.IncludeDirectories(
+            toolchain, cpp))
         {
             arguments.AddRange(["-isystem", directory]);
         }
 
-        foreach (string framework in toolchain.Resources
-            .Where(resource => resource.Purpose == ResourcePurpose.Framework)
-            .Select(resource => resource.Path)
-            .Distinct(PathComparer))
+        foreach (string framework in DriverResourceArguments.FrameworkDirectories(
+            toolchain))
         {
             arguments.AddRange(["-F", framework]);
         }
@@ -225,19 +219,14 @@ internal abstract class BuildAdapter
         var arguments = new List<string>();
         arguments.AddRange(TargetArguments(toolchain));
         arguments.AddRange(MultilibArguments(toolchain.Multilib));
-        foreach (string directory in toolchain.Resources
-            .Where(resource => resource.Purpose is ResourcePurpose.LibraryDirectory
-                or ResourcePurpose.RuntimeDirectory)
-            .Select(resource => resource.Path)
-            .Distinct(PathComparer))
+        foreach (string directory in DriverResourceArguments.LinkDirectories(
+            toolchain))
         {
             arguments.AddRange(["-L", directory]);
         }
 
-        foreach (string framework in toolchain.Resources
-            .Where(resource => resource.Purpose == ResourcePurpose.Framework)
-            .Select(resource => resource.Path)
-            .Distinct(PathComparer))
+        foreach (string framework in DriverResourceArguments.FrameworkDirectories(
+            toolchain))
         {
             arguments.AddRange(["-F", framework]);
         }
@@ -331,9 +320,7 @@ internal abstract class BuildAdapter
             _ => [],
         };
 
-    protected static StringComparer PathComparer => OperatingSystem.IsWindows()
-        ? StringComparer.OrdinalIgnoreCase
-        : StringComparer.Ordinal;
+    protected static StringComparer PathComparer => PathIdentity.Comparer;
 
     private static string PrependPath(string path, string? inherited) =>
         string.IsNullOrWhiteSpace(inherited)

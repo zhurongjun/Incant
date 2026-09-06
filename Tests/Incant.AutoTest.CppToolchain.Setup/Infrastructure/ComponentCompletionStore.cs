@@ -3,14 +3,6 @@ using System.Text.Json.Serialization;
 
 namespace Incant.AutoTest.CppToolchain.Setup;
 
-internal enum ProbeKind
-{
-    File,
-    Directory,
-}
-
-internal sealed record InstallationProbe(string RelativePath, ProbeKind Kind);
-
 internal static class ComponentCompletionStore
 {
     private const string CompletionFile = ".incant-component-ready.json";
@@ -21,15 +13,21 @@ internal static class ComponentCompletionStore
         Converters = { new JsonStringEnumConverter() },
     };
 
-    internal static async Task<bool> IsReadyAsync(
+    internal static async Task<bool> MatchesAsync(
         string root,
         string componentId,
         string fingerprint,
         IReadOnlyList<InstallationProbe> probes,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(probes);
+        if (probes.Count == 0)
+        {
+            return false;
+        }
+
         string markerPath = Path.Combine(root, CompletionFile);
-        if (!File.Exists(markerPath) || !ProbesExist(root, probes))
+        if (!File.Exists(markerPath))
         {
             return false;
         }
@@ -44,7 +42,7 @@ internal static class ComponentCompletionStore
                 && string.Equals(marker.ComponentId, componentId, StringComparison.Ordinal)
                 && string.Equals(marker.Fingerprint, fingerprint, StringComparison.Ordinal)
                 && marker.Probes is not null
-                && marker.Probes.SequenceEqual(probes);
+                && ProbesEqual(marker.Probes, probes);
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
@@ -61,10 +59,12 @@ internal static class ComponentCompletionStore
         IReadOnlyList<InstallationProbe> probes,
         CancellationToken cancellationToken)
     {
-        if (!ProbesExist(root, probes))
+        ArgumentNullException.ThrowIfNull(probes);
+        if (probes.Count == 0)
         {
-            throw new InvalidDataException(
-                $"Component '{componentId}' failed one or more completion probes below '{root}'.");
+            throw new ArgumentException(
+                "At least one completion probe is required.",
+                nameof(probes));
         }
 
         string markerPath = Path.Combine(root, CompletionFile);
@@ -99,54 +99,34 @@ internal static class ComponentCompletionStore
         }
     }
 
-    internal static bool ProbesExist(
-        string root,
-        IReadOnlyList<InstallationProbe> probes)
+    private static bool ProbesEqual(
+        IReadOnlyList<InstallationProbe?> left,
+        IReadOnlyList<InstallationProbe> right)
     {
-        foreach (InstallationProbe probe in probes)
+        if (left.Count != right.Count)
         {
-            string path = Path.Combine(root, NormalizeRelativePath(probe.RelativePath));
-            bool exists = probe.Kind switch
-            {
-                ProbeKind.File => File.Exists(path),
-                ProbeKind.Directory => Directory.Exists(path),
-                _ => throw new ArgumentOutOfRangeException(nameof(probes), probe.Kind, null),
-            };
-            if (!exists)
+            return false;
+        }
+
+        for (int index = 0; index < left.Count; ++index)
+        {
+            InstallationProbe? leftProbe = left[index];
+            InstallationProbe rightProbe = right[index];
+            if (leftProbe is null
+                || !string.Equals(
+                    leftProbe.RelativePath,
+                    rightProbe.RelativePath,
+                    StringComparison.Ordinal)
+                || leftProbe.Kind != rightProbe.Kind
+                || !(leftProbe.Arguments ?? []).SequenceEqual(
+                    rightProbe.Arguments ?? [],
+                    StringComparer.Ordinal))
             {
                 return false;
             }
         }
 
-        return probes.Count > 0;
-    }
-
-    internal static string NormalizeRelativePath(string path)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        if (Path.IsPathRooted(path))
-        {
-            throw new ArgumentException(
-                $"Probe path '{path}' must be relative.",
-                nameof(path));
-        }
-
-        string basePath = Path.Combine(Path.GetTempPath(), "incant-probe-root");
-        string normalized = Path.GetFullPath(path, basePath);
-        string relative = Path.GetRelativePath(basePath, normalized);
-        if (relative.Length == 0
-            || relative == "."
-            || Path.IsPathFullyQualified(relative)
-            || relative == ".."
-            || relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-            || relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
-        {
-            throw new ArgumentException(
-                $"Probe path '{path}' must remain inside the installation root.",
-                nameof(path));
-        }
-
-        return relative;
+        return true;
     }
 
     private sealed class CompletionMarker
@@ -157,6 +137,6 @@ internal static class ComponentCompletionStore
 
         public required string Fingerprint { get; init; }
 
-        public required IReadOnlyList<InstallationProbe> Probes { get; init; }
+        public required IReadOnlyList<InstallationProbe?> Probes { get; init; }
     }
 }

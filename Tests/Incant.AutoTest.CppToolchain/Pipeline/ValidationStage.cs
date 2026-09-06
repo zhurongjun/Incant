@@ -258,9 +258,9 @@ internal static class ValidationStage
         if (component.Role == "compiler"
             && (sdk.CompilerPath is null
                 || toolchain.ToolSet.CompilerPath is null
-                || !PathComparer.Equals(
-                    Normalize(sdk.CompilerPath),
-                    Normalize(toolchain.ToolSet.CompilerPath))))
+                || !PathIdentity.Comparer.Equals(
+                    PathIdentity.Normalize(sdk.CompilerPath),
+                    PathIdentity.Normalize(toolchain.ToolSet.CompilerPath))))
         {
             candidate.Invalidate(
                 "The compiler SDK is not owned by the selected ToolSet compiler.");
@@ -315,7 +315,7 @@ internal static class ValidationStage
             .GroupBy(
                 resource => (
                     resource.Purpose,
-                    Path: Normalize(resource.Path),
+                    Path: PathIdentity.Normalize(resource.Path),
                     resource.ApiLevel),
                 ResourceKeyComparer.Instance)
             .Where(group => group.Count() > 1)
@@ -542,27 +542,11 @@ internal static class ValidationStage
             .Contains(expected, StringComparer.OrdinalIgnoreCase);
 
     private static bool IsStrictDescendant(string parent, string child) =>
-        !PathComparer.Equals(Normalize(parent), Normalize(child))
-        && IsWithin(parent, child);
+        !PathIdentity.AreEqual(parent, child)
+        && PathIdentity.Contains(parent, child);
 
-    private static bool IsWithin(string root, string path)
-    {
-        string normalizedRoot = Normalize(root);
-        string normalizedPath = Normalize(path);
-        if (PathComparer.Equals(normalizedRoot, normalizedPath))
-        {
-            return true;
-        }
-
-        string prefix = Path.EndsInDirectorySeparator(normalizedRoot)
-            ? normalizedRoot
-            : normalizedRoot + Path.DirectorySeparatorChar;
-        return normalizedPath.StartsWith(
-            prefix,
-            OperatingSystem.IsWindows()
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal);
-    }
+    private static bool IsWithin(string root, string path) =>
+        PathIdentity.Contains(root, path);
 
     private static void ValidateResource(
         ToolchainCandidate candidate,
@@ -641,12 +625,12 @@ internal static class ValidationStage
             HashSet<string> defaultLibraries = defaultCandidate.Toolchain!.Resources
                 .Where(resource => resource.Purpose is ResourcePurpose.LibraryDirectory
                     or ResourcePurpose.RuntimeDirectory)
-                .Select(resource => Normalize(resource.Path))
-                .ToHashSet(PathComparer);
+                .Select(resource => PathIdentity.Normalize(resource.Path))
+                .ToHashSet(PathIdentity.Comparer);
             string[] overlap = picCandidate.Toolchain!.Resources
                 .Where(resource => resource.Purpose is ResourcePurpose.LibraryDirectory
                     or ResourcePurpose.RuntimeDirectory)
-                .Select(resource => Normalize(resource.Path))
+                .Select(resource => PathIdentity.Normalize(resource.Path))
                 .Where(defaultLibraries.Contains)
                 .ToArray();
             if (overlap.Length > 0)
@@ -699,26 +683,8 @@ internal static class ValidationStage
         || Related(root, sdk.EnvironmentPath)
         || sdk.CompilerPath is not null && Related(root, sdk.CompilerPath);
 
-    private static bool Related(string left, string right)
-    {
-        string normalizedLeft = Normalize(left);
-        string normalizedRight = Normalize(right);
-        StringComparison comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        return string.Equals(normalizedLeft, normalizedRight, comparison)
-            || normalizedLeft.StartsWith(
-                normalizedRight + Path.DirectorySeparatorChar, comparison)
-            || normalizedRight.StartsWith(
-                normalizedLeft + Path.DirectorySeparatorChar, comparison);
-    }
-
-    private static string Normalize(string path) =>
-        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-
-    private static StringComparer PathComparer => OperatingSystem.IsWindows()
-        ? StringComparer.OrdinalIgnoreCase
-        : StringComparer.Ordinal;
+    private static bool Related(string left, string right) =>
+        PathIdentity.Related(left, right);
 
     private sealed class ResourceKeyComparer
         : IEqualityComparer<(ResourcePurpose Purpose, string Path, int? ApiLevel)>
@@ -729,14 +695,14 @@ internal static class ValidationStage
             (ResourcePurpose Purpose, string Path, int? ApiLevel) x,
             (ResourcePurpose Purpose, string Path, int? ApiLevel) y) =>
             x.Purpose == y.Purpose
-            && PathComparer.Equals(x.Path, y.Path)
+            && PathIdentity.Comparer.Equals(x.Path, y.Path)
             && x.ApiLevel == y.ApiLevel;
 
         public int GetHashCode(
             (ResourcePurpose Purpose, string Path, int? ApiLevel) value) =>
             HashCode.Combine(
                 value.Purpose,
-                PathComparer.GetHashCode(value.Path),
+                PathIdentity.Comparer.GetHashCode(value.Path),
                 value.ApiLevel);
     }
 }

@@ -63,7 +63,7 @@ internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupCom
             + $"python={host.PythonSha256 ?? "system"};"
             + $"layoutSeed={LayoutSeedVersion}";
 
-        if (await ComponentCompletionStore.IsReadyAsync(
+        if (await ComponentCompletionStore.MatchesAsync(
             emsdkRoot,
             Id,
             fingerprint,
@@ -72,6 +72,11 @@ internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupCom
         {
             try
             {
+                await context.Probes.VerifyAsync(
+                    emsdkRoot,
+                    Id,
+                    s_completionProbes,
+                    cancellationToken).ConfigureAwait(false);
                 EmscriptenInstallation completed =
                     await EmscriptenRuntimeResolver.ResolveAsync(
                         context,
@@ -191,13 +196,11 @@ internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupCom
                     Timeout: TimeSpan.FromMinutes(45)),
                 cancellationToken).ConfigureAwait(false);
 
-            if (!ComponentCompletionStore.ProbesExist(staging, s_completionProbes))
-            {
-                throw new InvalidDataException(
-                    $"Emscripten {release.Version} did not produce "
-                    + "the default and PIC system libraries.");
-            }
-
+            await context.Probes.VerifyAsync(
+                staging,
+                Id,
+                s_completionProbes,
+                cancellationToken).ConfigureAwait(false);
             context.Paths.ReplaceDirectory(staging, emsdkRoot);
             string publishedEmsdk = SetupPathGuard.RequireFile(
                 Path.Combine(emsdkRoot, "emsdk.py"),
@@ -217,6 +220,11 @@ internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupCom
                     bootstrapPython,
                     host,
                     cancellationToken).ConfigureAwait(false);
+            await context.Probes.VerifyAsync(
+                emsdkRoot,
+                Id,
+                s_completionProbes,
+                cancellationToken).ConfigureAwait(false);
             await ComponentCompletionStore.WriteAsync(
                 emsdkRoot,
                 Id,

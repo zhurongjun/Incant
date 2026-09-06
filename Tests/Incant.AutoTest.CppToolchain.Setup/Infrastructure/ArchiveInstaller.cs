@@ -5,6 +5,8 @@ namespace Incant.AutoTest.CppToolchain.Setup;
 
 internal sealed class ArchiveInstaller(SetupContext context)
 {
+    private const string ArchiveContractVersion = "2";
+
     internal async Task<string> InstallAsync(
         string componentId,
         string archive,
@@ -21,8 +23,10 @@ internal sealed class ArchiveInstaller(SetupContext context)
         }
 
         string resolvedDestination = context.Paths.AssertChild(destination);
-        string fingerprint = $"archive-sha256:{sha256.ToLowerInvariant()}";
-        if (await ComponentCompletionStore.IsReadyAsync(
+        string fingerprint = "archive-contract:"
+            + ArchiveContractVersion
+            + $";sha256:{sha256.ToLowerInvariant()}";
+        if (await IsReadyAsync(
             resolvedDestination,
             componentId,
             fingerprint,
@@ -50,12 +54,11 @@ internal sealed class ArchiveInstaller(SetupContext context)
                     $"Archive '{archive}' does not contain root probe '{probes[0].RelativePath}'.");
             }
 
-            if (!ComponentCompletionStore.ProbesExist(source, probes))
-            {
-                throw new InvalidDataException(
-                    $"Archive '{archive}' is missing one or more probes for '{componentId}'.");
-            }
-
+            await context.Probes.VerifyAsync(
+                source,
+                componentId,
+                probes,
+                cancellationToken).ConfigureAwait(false);
             await ComponentCompletionStore.WriteAsync(
                 source,
                 componentId,
@@ -99,9 +102,8 @@ internal sealed class ArchiveInstaller(SetupContext context)
         cancellationToken.ThrowIfCancellationRequested();
         if (lowerName.EndsWith(".zip", StringComparison.Ordinal))
         {
-            await Task.Run(
-                () => ZipFile.ExtractToDirectory(archive, destination, overwriteFiles: false),
-                cancellationToken).ConfigureAwait(false);
+            await ZipArchiveExtractor.ExtractAsync(
+                archive, destination, cancellationToken).ConfigureAwait(false);
         }
         else if (lowerName.EndsWith(".tar.gz", StringComparison.Ordinal)
             || lowerName.EndsWith(".tgz", StringComparison.Ordinal))
@@ -138,6 +140,47 @@ internal sealed class ArchiveInstaller(SetupContext context)
         cancellationToken.ThrowIfCancellationRequested();
     }
 
+    private async Task<bool> IsReadyAsync(
+        string root,
+        string componentId,
+        string fingerprint,
+        IReadOnlyList<InstallationProbe> probes,
+        CancellationToken cancellationToken)
+    {
+        if (!await ComponentCompletionStore.MatchesAsync(
+            root,
+            componentId,
+            fingerprint,
+            probes,
+            cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        try
+        {
+            await context.Probes.VerifyAsync(
+                root,
+                componentId,
+                probes,
+                cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is InvalidDataException
+            or IOException
+            or UnauthorizedAccessException
+            or SetupCommandException)
+        {
+            Console.Error.WriteLine(
+                $"[archive:cache-invalid] destination={root} reason={exception.Message}");
+            return false;
+        }
+    }
+
     private static string? LocateArchiveRoot(
         string staging,
         InstallationProbe firstProbe)
@@ -159,13 +202,8 @@ internal sealed class ArchiveInstaller(SetupContext context)
         return null;
     }
 
-    private static bool ProbeExists(string root, InstallationProbe probe)
-    {
-        string path = Path.Combine(
-            root,
-            ComponentCompletionStore.NormalizeRelativePath(probe.RelativePath));
-        return probe.Kind == ProbeKind.File ? File.Exists(path) : Directory.Exists(path);
-    }
+    private static bool ProbeExists(string root, InstallationProbe probe) =>
+        InstallationProbeVerifier.Exists(root, probe);
 
     private static string ResolveTar()
     {

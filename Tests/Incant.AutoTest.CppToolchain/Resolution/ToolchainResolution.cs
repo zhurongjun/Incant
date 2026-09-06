@@ -381,30 +381,11 @@ internal static class ToolchainResolution
                 .Split('-', StringSplitOptions.RemoveEmptyEntries));
     }
 
-    internal static bool Related(string left, string right)
-    {
-        string normalizedLeft = Normalize(left);
-        string normalizedRight = Normalize(right);
-        StringComparison comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        return SamePath(normalizedLeft, normalizedRight)
-            || normalizedLeft.StartsWith(
-                normalizedRight + Path.DirectorySeparatorChar, comparison)
-            || normalizedRight.StartsWith(
-                normalizedLeft + Path.DirectorySeparatorChar, comparison);
-    }
+    internal static bool Related(string left, string right) =>
+        PathIdentity.Related(left, right);
 
     internal static bool SamePath(string left, string right) =>
-        string.Equals(
-            Normalize(left),
-            Normalize(right),
-            OperatingSystem.IsWindows()
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal);
-
-    internal static string Normalize(string path) =>
-        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        PathIdentity.AreEqual(left, right);
 }
 
 internal sealed record ToolSetOwner(
