@@ -8,8 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../Source/Incant.Core/Incant.Core.csproj" />
+    <ProjectReference Include="../../Source/Incant.Base/Incant.Base.csproj" />
     <ProjectReference Include="../Incant.AutoTest.CppToolchain.Shared/Incant.AutoTest.CppToolchain.Shared.csproj" />
-    <None Update="Fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -49,16 +49,56 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup ${{ matrix.profile }}
-        uses: ./.github/actions/setup-toolchains-autotest
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          profile: ${{ matrix.profile }}
+          dotnet-version: 10.0.x
+          dotnet-quality: ga
+
+      - name: Restore toolchain cache
+        id: toolchain-cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: build/toolchains
+          key: toolchains-v5-${{ runner.os }}-${{ runner.arch }}-${{ matrix.profile }}-${{ hashFiles('Tests/Incant.AutoTest.CppToolchain.Setup/**', 'Tests/Incant.AutoTest.CppToolchain.Shared/**') }}
+          restore-keys: |
+            toolchains-recovery-v5-${{ runner.os }}-${{ runner.arch }}-${{ matrix.profile }}-
+
+      - name: Setup ${{ matrix.profile }}
+        id: setup
+        continue-on-error: true
+        shell: bash
+        run: >-
+          dotnet run
+          --project Tests/Incant.AutoTest.CppToolchain.Setup/Incant.AutoTest.CppToolchain.Setup.csproj
+          --configuration Release
+          -- "${{ matrix.profile }}"
+
+      - name: Save complete toolchain cache
+        if: steps.setup.outcome == 'success' && steps.toolchain-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: build/toolchains
+          key: toolchains-v5-${{ runner.os }}-${{ runner.arch }}-${{ matrix.profile }}-${{ hashFiles('Tests/Incant.AutoTest.CppToolchain.Setup/**', 'Tests/Incant.AutoTest.CppToolchain.Shared/**') }}
+
+      - name: Save recovery toolchain cache
+        if: always() && steps.setup.outcome == 'failure'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: build/toolchains
+          key: toolchains-recovery-v5-${{ runner.os }}-${{ runner.arch }}-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Run ${{ matrix.profile }}
+        if: always() && steps.setup.outcome == 'success'
         shell: bash
         env:
           INCANT_AUTOTEST_PROFILE: ${{ matrix.profile }}
         run: Incant.AutoTest.CppToolchain "$INCANT_AUTOTEST_PROFILE"
+
+      - name: Report setup failure
+        if: always() && steps.setup.outcome != 'success'
+        shell: bash
+        run: exit 1
 
       - name: Upload report
         if: always()
@@ -68,6 +108,7 @@ jobs:
           path: |
             build/toolchain-environments/${{ matrix.profile }}.json
             build/toolchain-environments/${{ matrix.profile }}.setup.json
+            build/toolchain-setup/${{ matrix.profile }}/logs
             build/toolchain-reports/${{ matrix.profile }}.json
             build/toolchain-autotest/${{ matrix.profile }}/logs
           if-no-files-found: warn

@@ -15,6 +15,8 @@
   </Folder>
   <Folder Name="/Tests/">
     <Project Path="Tests/Incant.AutoTest.CppToolchain/Incant.AutoTest.CppToolchain.csproj" />
+    <Project Path="Tests/Incant.AutoTest.CppToolchain.Setup/Incant.AutoTest.CppToolchain.Setup.csproj" />
+    <Project Path="Tests/Incant.AutoTest.CppToolchain.Shared/Incant.AutoTest.CppToolchain.Shared.csproj" />
     <Project Path="Tests/Incant.ProcessTestHelper/Incant.ProcessTestHelper.csproj" />
     <Project Path="Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj" />
     <Project Path="Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj" />

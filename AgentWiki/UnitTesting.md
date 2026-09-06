@@ -57,7 +57,7 @@ dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configurati
 - CI Setup 写出 schema version 1 的环境清单，记录实际安装根目录、版本、来源、局部环境和运行时。AutoTest 将这些路径作为候选边界，并通过 Finder 重新确认身份。
 - 每个声明安装均执行无约束、种类、版本和显式根目录发现，比较身份快照，并覆盖不存在路径、错误版本和错误目标等负向行为。
 - 固定签入的 C/C++ 资产用于编译多个对象、创建和检查静态库、链接纯 C 程序、构建共享库、链接 C++ 程序及运行可执行产物。Emscripten 另测默认与 `pic`/side-module 布局；WASI 使用 Wasmtime 执行。
-- AutoTest 只读取环境清单和安装，不下载依赖或修改全局环境。额外 SDK 由 `.github/actions/setup-toolchains-autotest` 安装到 `build/toolchains`，各候选的环境变量仅传给对应进程。
+- AutoTest 只读取环境清单和安装，不下载依赖或修改全局环境。额外 SDK 由 `Tests/Incant.AutoTest.CppToolchain.Setup` 安装到 `build/toolchains`，各候选的环境变量仅传给对应进程。
 - 报告总是在 `finally` 中写出，包含完整发现结果、候选决策、诊断、动作、退出码、耗时、日志和产物。宿主/清单配置错误返回 2，测试失败返回 1，成功返回 0，取消返回 130。
 - 本机只能声明实际执行过的 Profile；四个 GitHub runner 的 matrix 结果才构成跨平台功能验收。
 

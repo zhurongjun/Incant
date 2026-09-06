@@ -1,16 +1,19 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Incant.AutoTest.CppToolchain;
+namespace Incant.AutoTest.CppToolchain.Shared;
 
 internal sealed class EnvironmentManifest
 {
+    internal const int CurrentSchemaVersion = 1;
+
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         RespectNullableAnnotations = true,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        WriteIndented = true,
         Converters = { new JsonStringEnumConverter() },
     };
 
@@ -34,6 +37,46 @@ internal sealed class EnvironmentManifest
         return await JsonSerializer.DeserializeAsync<EnvironmentManifest>(
             stream, s_jsonOptions, cancellationToken).ConfigureAwait(false)
             ?? throw new JsonException("The environment manifest is empty.");
+    }
+
+    internal static async Task SaveAsync(
+        string path,
+        EnvironmentManifest manifest,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        ArgumentNullException.ThrowIfNull(manifest);
+
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (string.IsNullOrEmpty(directory))
+        {
+            throw new ArgumentException("The environment manifest path has no parent directory.", nameof(path));
+        }
+
+        Directory.CreateDirectory(directory);
+        string temporaryPath = fullPath + $".{System.Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await JsonSerializer.SerializeAsync(
+                    stream, manifest, s_jsonOptions, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync("\n"u8.ToArray(), cancellationToken).ConfigureAwait(false);
+            }
+
+            File.Move(temporaryPath, fullPath, overwrite: true);
+        }
+        finally
+        {
+            File.Delete(temporaryPath);
+        }
     }
 }
 
