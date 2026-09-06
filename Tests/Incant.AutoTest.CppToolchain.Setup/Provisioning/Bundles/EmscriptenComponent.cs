@@ -4,6 +4,8 @@ namespace Incant.AutoTest.CppToolchain.Setup;
 
 internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupComponent
 {
+    private const string LayoutSeedVersion = "1";
+
     private static readonly IReadOnlyList<InstallationProbe> s_completionProbes =
     [
         new(Path.Combine("upstream", "emscripten", "emscripten-version.txt"), ProbeKind.File),
@@ -58,7 +60,8 @@ internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupCom
         string fingerprint =
             $"emsdk={BundleCatalog.EmsdkRevision};emscripten={release.ReleaseRevision};"
             + $"archive={release.Sha256};node={host.NodeSha256};"
-            + $"python={host.PythonSha256 ?? "system"}";
+            + $"python={host.PythonSha256 ?? "system"};"
+            + $"layoutSeed={LayoutSeedVersion}";
 
         if (await ComponentCompletionStore.IsReadyAsync(
             emsdkRoot,
@@ -142,7 +145,7 @@ internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupCom
                 "emsdk Python entry point");
             var installEnvironment = new Dictionary<string, string?>
             {
-                ["EMSDK_KEEP_DOWNLOADS"] = "1",
+                ["EMSDK_KEEP_DOWNLOADS"] = null,
             };
             await context.Commands.RunAsync(
                 bootstrapPython,
@@ -157,7 +160,6 @@ internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupCom
                 [emsdkProgram, "activate", release.Version, "--embedded"],
                 new SetupCommandOptions(
                     WorkingDirectory: staging,
-                    Environment: installEnvironment,
                     Timeout: TimeSpan.FromMinutes(20)),
                 cancellationToken).ConfigureAwait(false);
 
@@ -174,7 +176,7 @@ internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupCom
                 "Emscripten system library builder");
             await context.Commands.RunAsync(
                 installation.PythonPath,
-                [embuilder, "build", "sysroot", "MINIMAL"],
+                [embuilder, "build", "sysroot", "libc"],
                 new SetupCommandOptions(
                     WorkingDirectory: installation.RootPath,
                     Environment: installation.Environment,
@@ -182,7 +184,7 @@ internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupCom
                 cancellationToken).ConfigureAwait(false);
             await context.Commands.RunAsync(
                 installation.PythonPath,
-                [embuilder, "--pic", "build", "MINIMAL_PIC"],
+                [embuilder, "--pic", "build", "libc"],
                 new SetupCommandOptions(
                     WorkingDirectory: installation.RootPath,
                     Environment: installation.Environment,
@@ -205,7 +207,6 @@ internal sealed class EmscriptenComponent(EmscriptenRelease release) : ISetupCom
                 [publishedEmsdk, "activate", release.Version, "--embedded"],
                 new SetupCommandOptions(
                     WorkingDirectory: emsdkRoot,
-                    Environment: installEnvironment,
                     Timeout: TimeSpan.FromMinutes(20)),
                 cancellationToken).ConfigureAwait(false);
             EmscriptenInstallation published =
