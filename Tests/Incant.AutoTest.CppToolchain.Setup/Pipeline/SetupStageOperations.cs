@@ -45,6 +45,7 @@ internal static class SetupStageOperations
         Directory.CreateDirectory(context.Options.ToolchainRoot);
         Directory.CreateDirectory(context.Paths.DownloadsRoot);
         Directory.CreateDirectory(context.Options.WorkRoot);
+        Directory.CreateDirectory(context.StateRoot);
         Directory.CreateDirectory(
             Path.GetDirectoryName(context.Options.EnvironmentPath)
                 ?? throw new SetupConfigurationException(

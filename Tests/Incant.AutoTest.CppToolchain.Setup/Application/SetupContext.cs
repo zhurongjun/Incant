@@ -49,8 +49,10 @@ internal sealed class SetupContext
 
     internal IReadOnlyList<SetupCommandRecord> CommandRecords => _commands;
 
+    internal string StateRoot => Path.Combine(Options.WorkRoot, "state");
+
     internal string PendingManifestPath =>
-        Path.Combine(Options.WorkRoot, "state", "environment.pending.json");
+        Path.Combine(StateRoot, "environment.pending.json");
 
     internal string? FatalError { get; private set; }
 
