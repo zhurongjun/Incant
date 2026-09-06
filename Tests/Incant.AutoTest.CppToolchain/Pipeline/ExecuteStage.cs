@@ -7,8 +7,10 @@ internal static class ExecuteStage
         CancellationToken cancellationToken)
     {
         var scheduler = new SerialBuildScheduler();
-        foreach (ToolchainCandidate candidate in context.Candidates
-            .Where(candidate => candidate.Status == CandidateStatus.Resolved))
+        ToolchainCandidate[] candidates = context.Candidates
+            .Where(candidate => candidate.Status == CandidateStatus.Resolved)
+            .ToArray();
+        foreach (ToolchainCandidate candidate in candidates)
         {
             BuildAction[] actions = candidate.BuildPlan!.Actions
                 .Where(action => action.Phase == BuildActionPhase.Execute)
@@ -36,6 +38,7 @@ internal static class ExecuteStage
         }
 
         return context.RequiredCandidatesSatisfy(
+            candidates,
             candidate => candidate.Status == CandidateStatus.Passed);
     }
 }

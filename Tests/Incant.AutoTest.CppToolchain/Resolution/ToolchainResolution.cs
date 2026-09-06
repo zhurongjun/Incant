@@ -64,7 +64,8 @@ internal static class ToolchainResolution
         return probe.Sdks
             .Where(sdk => sdk.Kind == kind
                 && CompilerMatches(toolSet, sdk)
-                && BelongsTo(owner.Manifest, sdk))
+                && BelongsTo(owner.Manifest, sdk)
+                && (kind != SdkKind.Msvc || MsvcIdentityMatches(toolSet, sdk)))
             .OrderByDescending(sdk => sdk.Version)
             .FirstOrDefault();
     }
@@ -277,11 +278,15 @@ internal static class ToolchainResolution
     internal static Sdk? FindMsvcSdk(
         ToolSet toolSet,
         IEnumerable<Sdk> sdks) => sdks
-            .Where(sdk => sdk.Kind == SdkKind.Msvc
-                && (Related(toolSet.RootPath, sdk.RootPath)
-                    || SamePath(toolSet.EnvironmentPath, sdk.EnvironmentPath)))
-            .OrderByDescending(sdk => sdk.Version)
-            .FirstOrDefault();
+            .Where(sdk => MsvcIdentityMatches(toolSet, sdk))
+            .SingleOrDefault();
+
+    internal static bool MsvcIdentityMatches(ToolSet toolSet, Sdk sdk) =>
+        toolSet.Kind == ToolKind.VisualStudio
+        && sdk.Kind == SdkKind.Msvc
+        && SamePath(toolSet.RootPath, sdk.RootPath)
+        && SamePath(toolSet.EnvironmentPath, sdk.EnvironmentPath)
+        && Equals(toolSet.Version, sdk.Version);
 
     internal static bool CompilerMatches(ToolSet toolSet, Sdk sdk) =>
         toolSet.CompilerPath is not null

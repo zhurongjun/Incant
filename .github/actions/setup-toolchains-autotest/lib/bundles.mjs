@@ -114,6 +114,12 @@ async function prepareAndroidNdk(context, release) {
         darwin: "darwin",
         linux: "linux",
     });
+    const hostTag = hostValue({
+        win32: "windows-x86_64",
+        darwin: "darwin-x86_64",
+        linux: "linux-x86_64",
+    });
+    const executableSuffix = process.platform === "win32" ? ".exe" : "";
     const hashKey = `${release.release}:${platform}`;
     const sha256 = requireHash(
         ANDROID_HASHES,
@@ -126,7 +132,35 @@ async function prepareAndroidNdk(context, release) {
         context,
         archive,
         path.join(context.toolchainRoot, `android-ndk-${release.version}`),
-        "source.properties",
+        [
+            "source.properties",
+            path.join(
+                "toolchains",
+                "llvm",
+                "prebuilt",
+                hostTag,
+                "bin",
+                `clang${executableSuffix}`,
+            ),
+            path.join(
+                "toolchains",
+                "llvm",
+                "prebuilt",
+                hostTag,
+                "bin",
+                `llvm-ar${executableSuffix}`,
+            ),
+            path.join(
+                "toolchains",
+                "llvm",
+                "prebuilt",
+                hostTag,
+                "sysroot",
+                "usr",
+                "include",
+                "stdio.h",
+            ),
+        ],
         sha256,
     );
     const metadataPath = await context.requirePath(
@@ -306,36 +340,38 @@ async function prepareEmscripten(context, release) {
         "Emscripten config",
         "file",
     );
-    const node = await findEmbeddedExecutable(
+    const nodeProgram = await findEmbeddedProgram(
         context,
         path.join(emsdkRoot, "node"),
         [process.platform === "win32" ? "node.exe" : "node"],
         "Emscripten Node",
+        "node",
+        "24.19.0",
     );
-    const nodeVersion = await getProgramVersion(node);
-    if (nodeVersion !== "24.19.0") {
-        throw new Error(
-            `Emscripten ${release.version} uses Node ${nodeVersion}; expected 24.19.0.`,
-        );
-    }
+    const node = nodeProgram.path;
+    const nodeVersion = nodeProgram.version;
 
     let python;
+    let pythonVersion;
     if (host.pythonFile) {
-        python = await findEmbeddedExecutable(
+        const pythonProgram = await findEmbeddedProgram(
             context,
             path.join(emsdkRoot, "python"),
             process.platform === "win32"
                 ? ["python.exe"]
                 : ["python3", "python"],
             "Emscripten Python",
+            "python",
+            "3.13.3",
         );
+        python = pythonProgram.path;
+        pythonVersion = pythonProgram.version;
     } else {
         python = bootstrapPython;
-    }
-    const pythonVersion = await getProgramVersion(python, ["--version"]);
-    if (host.pythonFile && pythonVersion !== "3.13.3") {
-        throw new Error(
-            `Emscripten ${release.version} uses Python ${pythonVersion}; expected 3.13.3.`,
+        pythonVersion = await getProgramVersion(
+            python,
+            ["--version"],
+            "python",
         );
     }
 
@@ -524,7 +560,14 @@ async function prepareWasiSdk(context, version) {
         context,
         archive,
         path.join(context.toolchainRoot, `wasi-sdk-${version}`),
-        clangProbe,
+        [
+            clangProbe,
+            path.join(
+                "bin",
+                process.platform === "win32" ? "llvm-ar.exe" : "llvm-ar",
+            ),
+            path.join("share", "wasi-sysroot", "include", "stdio.h"),
+        ],
         sha256,
     );
     context.addInstallation({
@@ -567,7 +610,7 @@ async function prepareWasmtime(context) {
         context,
         archive,
         path.join(context.toolchainRoot, `wasmtime-${version}`),
-        host.probe,
+        [host.probe],
         host.sha256,
     );
     const runtime = await context.requirePath(
@@ -575,7 +618,11 @@ async function prepareWasmtime(context) {
         `Wasmtime ${version}`,
         "file",
     );
-    const actualVersion = await getProgramVersion(runtime);
+    const actualVersion = await getProgramVersion(
+        runtime,
+        ["--version"],
+        "wasmtime",
+    );
     if (actualVersion !== version) {
         throw new Error(
             `Wasmtime at '${runtime}' is version '${actualVersion}'; expected '${version}'.`,
@@ -629,7 +676,14 @@ function emscriptenHost() {
     });
 }
 
-async function findEmbeddedExecutable(context, root, names, description) {
+async function findEmbeddedProgram(
+    context,
+    root,
+    names,
+    description,
+    program,
+    expectedVersion,
+) {
     const resolvedRoot = await context.requirePath(
         root,
         `${description} root`,
@@ -669,7 +723,30 @@ async function findEmbeddedExecutable(context, root, names, description) {
         );
     }
     matches.sort((left, right) => left.localeCompare(right));
-    return matches[0];
+    const inspected = [];
+    for (const executable of matches) {
+        let version;
+        try {
+            version = await getProgramVersion(
+                executable,
+                ["--version"],
+                program,
+            );
+        } catch (error) {
+            inspected.push(
+                `${executable} (unparseable: ${error instanceof Error ? error.message : String(error)})`,
+            );
+            continue;
+        }
+        inspected.push(`${executable} (${version})`);
+        if (version === expectedVersion) {
+            return { path: executable, version };
+        }
+    }
+
+    throw new Error(
+        `${description} ${expectedVersion} was not found below '${resolvedRoot}'. Inspected: ${inspected.join("; ")}.`,
+    );
 }
 
 function hostValue(values) {

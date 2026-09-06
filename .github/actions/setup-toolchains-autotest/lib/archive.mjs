@@ -92,19 +92,20 @@ export async function expandToolArchive(
     context,
     archive,
     destination,
-    probePath,
+    probePaths,
     sha256,
 ) {
+    const probes = normalizeProbePaths(probePaths);
     const resolvedDestination = context.assertToolchainPath(destination);
     if (!/^[0-9a-f]{64}$/i.test(sha256)) {
         throw new Error(
             `Archive '${archive}' has an invalid SHA-256 value '${sha256}'.`,
         );
     }
-    const completion = archiveCompletion(sha256, probePath);
-    if (await isArchiveReady(resolvedDestination, probePath, completion)) {
+    const completion = archiveCompletion(sha256, probes);
+    if (await isArchiveReady(resolvedDestination, probes, completion)) {
         console.log(
-            `[archive:cache-hit] destination=${resolvedDestination} probe=${probePath}`,
+            `[archive:cache-hit] destination=${resolvedDestination} probes=${probes.join(",")}`,
         );
         return await context.requirePath(
             resolvedDestination,
@@ -118,14 +119,19 @@ export async function expandToolArchive(
     );
     await context.resetToolchainDirectory(staging);
     try {
-        const tar = await requireCommand(["tar"], "tar");
-        console.log(`[archive:extract] archive=${archive} staging=${staging}`);
-        await runCommand(tar, ["-xf", archive, "-C", staging]);
+        const extractor = await selectArchiveExtractor(archive);
+        console.log(
+            `[archive:extract] format=${extractor.format} backend=${extractor.executable} archive=${archive} staging=${staging}`,
+        );
+        await runCommand(
+            extractor.executable,
+            extractor.arguments(archive, staging),
+        );
 
-        const source = await locateArchiveRoot(staging, probePath);
+        const source = await locateArchiveRoot(staging, probes[0]);
         if (!source) {
             throw new Error(
-                `Archive '${archive}' does not contain '${probePath}'.`,
+                `Archive '${archive}' does not contain root probe '${probes[0]}'.`,
             );
         }
 
@@ -138,18 +144,20 @@ export async function expandToolArchive(
             );
         }
 
-        await context.requirePath(
-            path.join(resolvedDestination, probePath),
-            `archive probe '${probePath}'`,
-            "file",
-        );
+        for (const probe of probes) {
+            await context.requirePath(
+                path.join(resolvedDestination, probe),
+                `archive probe '${probe}'`,
+                "file",
+            );
+        }
         await writeFile(
             path.join(resolvedDestination, ARCHIVE_COMPLETION_FILE),
             completion,
             "utf8",
         );
         console.log(
-            `[archive:ready] destination=${resolvedDestination} probe=${probePath}`,
+            `[archive:ready] destination=${resolvedDestination} probes=${probes.join(",")}`,
         );
         return await context.requirePath(
             resolvedDestination,
@@ -161,12 +169,79 @@ export async function expandToolArchive(
     }
 }
 
-async function isArchiveReady(destination, probePath, completion) {
+async function selectArchiveExtractor(archive) {
+    const format = archiveFormat(archive);
+    if (format === "zip" && process.platform !== "win32") {
+        const unzip = await requireCommand(["unzip"], "ZIP extractor");
+        return {
+            format,
+            executable: unzip,
+            arguments: (source, destination) => [
+                "-q",
+                source,
+                "-d",
+                destination,
+            ],
+        };
+    }
+
+    const tar =
+        process.platform === "win32"
+            ? await requireWindowsSystemTar()
+            : await requireCommand(["tar"], "tar archive extractor");
+    return {
+        format,
+        executable: tar,
+        arguments: (source, destination) => ["-xf", source, "-C", destination],
+    };
+}
+
+function archiveFormat(archive) {
+    const name = path.basename(archive).toLowerCase();
+    if (name.endsWith(".zip")) {
+        return "zip";
+    }
     if (
-        !(await isFile(path.join(destination, probePath))) ||
-        !(await isFile(path.join(destination, ARCHIVE_COMPLETION_FILE)))
+        name.endsWith(".tar.gz") ||
+        name.endsWith(".tgz") ||
+        name.endsWith(".tar.xz") ||
+        name.endsWith(".txz") ||
+        name.endsWith(".tar")
     ) {
+        return "tar";
+    }
+
+    throw new Error(
+        `Archive '${archive}' has an unsupported format. Expected ZIP, tar, tar.gz, or tar.xz.`,
+    );
+}
+
+async function requireWindowsSystemTar() {
+    const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR;
+    if (!windowsRoot) {
+        throw new Error(
+            "The Windows system directory could not be resolved for archive extraction.",
+        );
+    }
+
+    const executable = path.join(windowsRoot, "System32", "tar.exe");
+    if (!(await isFile(executable))) {
+        throw new Error(
+            `The Windows archive extractor was not found at '${executable}'.`,
+        );
+    }
+
+    return executable;
+}
+
+async function isArchiveReady(destination, probePaths, completion) {
+    if (!(await isFile(path.join(destination, ARCHIVE_COMPLETION_FILE)))) {
         return false;
+    }
+    for (const probePath of probePaths) {
+        if (!(await isFile(path.join(destination, probePath)))) {
+            return false;
+        }
     }
 
     try {
@@ -181,12 +256,49 @@ async function isArchiveReady(destination, probePath, completion) {
     }
 }
 
-function archiveCompletion(sha256, probePath) {
+function archiveCompletion(sha256, probePaths) {
     return `${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         archiveSha256: sha256.toLowerCase(),
-        probePath,
+        probePaths,
     })}\n`;
+}
+
+function normalizeProbePaths(probePaths) {
+    const values = Array.isArray(probePaths) ? probePaths : [probePaths];
+    if (values.length === 0) {
+        throw new Error("At least one archive probe path is required.");
+    }
+
+    const result = [];
+    const seen = new Set();
+    for (const value of values) {
+        if (typeof value !== "string" || value.trim().length === 0) {
+            throw new Error("Archive probe paths must be non-empty strings.");
+        }
+
+        const normalized = path.normalize(value);
+        if (
+            path.isAbsolute(normalized) ||
+            normalized === ".." ||
+            normalized.startsWith(`..${path.sep}`)
+        ) {
+            throw new Error(
+                `Archive probe path '${value}' must remain inside the archive root.`,
+            );
+        }
+
+        const key =
+            process.platform === "win32"
+                ? normalized.toLowerCase()
+                : normalized;
+        if (!seen.has(key)) {
+            seen.add(key);
+            result.push(normalized);
+        }
+    }
+
+    return result;
 }
 
 async function downloadFile(source, destination, expectedHash, attempt) {

@@ -76,9 +76,15 @@ internal sealed class AutoTestContext(AutoTestOptions options)
             && (installationId is null || runtime.InstallationId == installationId));
 
     internal bool RequiredCandidatesSatisfy(
+        Func<ToolchainCandidate, bool> predicate) =>
+        RequiredCandidatesSatisfy(Candidates, predicate);
+
+    internal bool RequiredCandidatesSatisfy(
+        IEnumerable<ToolchainCandidate> candidates,
         Func<ToolchainCandidate, bool> predicate)
     {
-        IEnumerable<ToolchainCandidate> required = Candidates.Where(candidate => candidate.Required);
+        IEnumerable<ToolchainCandidate> required = candidates.Where(
+            candidate => candidate.Required);
         return Profile.FailurePolicy.RequireAllRequiredCandidates
             ? required.All(predicate)
             : required.Any(predicate);

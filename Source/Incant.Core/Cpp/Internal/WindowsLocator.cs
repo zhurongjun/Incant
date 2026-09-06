@@ -131,6 +131,25 @@ internal static class WindowsLocator
         return [];
     }
 
+    internal static string? MsvcRootForCompiler(string compilerPath)
+    {
+        if (!File.Exists(compilerPath)
+            || !string.Equals(
+                Path.GetFileNameWithoutExtension(compilerPath),
+                "cl",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string compiler = SearchPaths.Normalize(compilerPath);
+        return MsvcRoots(compiler)
+            .Select(SearchPaths.Normalize)
+            .Where(root => SearchPaths.Contains(Path.Combine(root, "bin"), compiler))
+            .OrderByDescending(root => root.Length)
+            .FirstOrDefault();
+    }
+
     internal static string MsvcEnvironment(string root)
     {
         string? parent = Path.GetDirectoryName(root);

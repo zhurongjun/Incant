@@ -212,20 +212,36 @@ export async function findCommands(names, environment = process.env) {
     return matches;
 }
 
-export async function getProgramVersion(executable, args = ["--version"]) {
+export async function getProgramVersion(
+    executable,
+    args = ["--version"],
+    program = undefined,
+) {
     const result = await captureCommand(executable, args);
     const output = `${result.stdout}\n${result.stderr}`.trim();
-    let match = output.match(
-        /(?:gcc|clang|node|wasmtime)(?:\.exe)?(?:\s+version)?\s+v?(?<version>\d+(?:\.\d+){1,3})/im,
+    return parseProgramVersion(
+        output,
+        program ?? programIdentity(executable),
+        executable,
     );
-    match ??= output.match(/\b(?<version>\d+\.\d+(?:\.\d+){0,2})\b/m);
-    if (!match?.groups?.version) {
-        throw new Error(
-            `Could not parse the version reported by '${executable}': ${output}`,
-        );
+}
+
+export function parseProgramVersion(
+    output,
+    program = "generic",
+    source = program,
+) {
+    const patterns = versionPatterns(program);
+    for (const pattern of patterns) {
+        const match = String(output).match(pattern);
+        if (match?.groups?.version) {
+            return match.groups.version;
+        }
     }
 
-    return match.groups.version;
+    throw new Error(
+        `Could not parse the ${program} version reported by '${source}': ${String(output).trim()}`,
+    );
 }
 
 export async function resolveCompiler(
@@ -318,6 +334,65 @@ function versionParts(version) {
     return match
         ? match[0].split(".").map((part) => Number.parseInt(part, 10))
         : [];
+}
+
+function programIdentity(executable) {
+    const name = path
+        .basename(executable)
+        .toLowerCase()
+        .replace(/\.(?:exe|cmd|bat)$/i, "");
+    if (name === "node") {
+        return "node";
+    }
+    if (name.startsWith("python")) {
+        return "python";
+    }
+    if (name === "wasmtime") {
+        return "wasmtime";
+    }
+    if (name.includes("clang")) {
+        return "clang";
+    }
+    if (name.includes("gcc") || name.includes("g++")) {
+        return "gcc";
+    }
+    return "generic";
+}
+
+function versionPatterns(program) {
+    const version = "(?<version>\\d+(?:\\.\\d+){1,3})";
+    switch (program) {
+        case "node":
+            return [new RegExp(`^\\s*v${version}\\s*$`, "im")];
+        case "python":
+            return [new RegExp(`^\\s*Python\\s+${version}(?:\\s|$)`, "im")];
+        case "wasmtime":
+            return [new RegExp(`^\\s*wasmtime\\s+v?${version}(?:\\s|$)`, "im")];
+        case "clang":
+            return [
+                new RegExp(
+                    `(?:Apple\\s+)?clang\\s+version\\s+${version}(?:\\s|$)`,
+                    "im",
+                ),
+            ];
+        case "gcc":
+            return [
+                new RegExp(
+                    `(?:gcc|g\\+\\+)(?:[^\\r\\n]*?)\\s+${version}(?:\\s|$)`,
+                    "im",
+                ),
+                new RegExp(`^\\s*(?:gcc|g\\+\\+)\\s+${version}(?:\\s|$)`, "im"),
+            ];
+        case "generic":
+            return [
+                new RegExp(
+                    `(?<![A-Za-z0-9.])v?${version}(?![A-Za-z0-9.])`,
+                    "m",
+                ),
+            ];
+        default:
+            throw new Error(`Unknown version parser '${program}'.`);
+    }
 }
 
 function appendTail(current, addition) {

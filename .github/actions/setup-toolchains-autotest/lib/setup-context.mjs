@@ -2,6 +2,7 @@ import {
     appendFile,
     mkdir,
     realpath,
+    rename,
     rm,
     stat,
     writeFile,
@@ -234,11 +235,7 @@ export class SetupContext {
             installations: this.installations,
             runtimes: this.runtimes,
         };
-        await writeFile(
-            this.outputPath,
-            `${JSON.stringify(manifest, null, 2)}\n`,
-            "utf8",
-        );
+        await writeJsonAtomically(this.outputPath, manifest);
         console.log(
             `[manifest] installations=${this.installations.length} runtimes=${this.runtimes.length}`,
         );
@@ -268,12 +265,7 @@ export class SetupContext {
             installations: this.installations,
             runtimes: this.runtimes,
         };
-        await mkdir(path.dirname(this.setupReportPath), { recursive: true });
-        await writeFile(
-            this.setupReportPath,
-            `${JSON.stringify(report, null, 2)}\n`,
-            "utf8",
-        );
+        await writeJsonAtomically(this.setupReportPath, report);
         console.log(`[setup:report] ${this.setupReportPath}`);
     }
 
@@ -415,6 +407,20 @@ function errorChain(error) {
         current = current.cause;
     }
     return result;
+}
+
+async function writeJsonAtomically(destination, value) {
+    await mkdir(path.dirname(destination), { recursive: true });
+    const temporary = `${destination}.${process.pid}.${Date.now()}.tmp`;
+    try {
+        await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
+            encoding: "utf8",
+            flag: "wx",
+        });
+        await rename(temporary, destination);
+    } finally {
+        await rm(temporary, { force: true });
+    }
 }
 
 function platformName() {

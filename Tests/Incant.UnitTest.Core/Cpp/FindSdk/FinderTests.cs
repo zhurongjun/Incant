@@ -207,6 +207,71 @@ public sealed class FinderTests
     }
 
     [Fact]
+    public async Task MsvcCompilerConstraintSelectsOneConcreteToolset()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string environment = Root(
+            Path.Combine("msvc-multiple", Guid.NewGuid().ToString("N")));
+        string olderRoot = Path.Combine(
+            environment, "VC", "Tools", "MSVC", "14.44.35207");
+        string newerRoot = Path.Combine(
+            environment, "VC", "Tools", "MSVC", "14.51.36231");
+        try
+        {
+            string olderCompiler = CreateMsvcInstallation(
+                olderRoot, TargetArchitecture.X64);
+            string newerCompiler = CreateMsvcInstallation(
+                newerRoot, TargetArchitecture.X64, TargetArchitecture.ARM64);
+            var finder = new Finder([new WindowsProvider()]);
+            var query = new SdkQuery
+            {
+                Kind = Kind.Msvc,
+                RootPath = environment,
+                CompilerPath = olderCompiler,
+                TargetPlatform = TargetPlatform.Windows,
+                TargetArchitecture = TargetArchitecture.X64,
+                IncludePreview = true,
+                Environment = new Dictionary<string, string?>(),
+            };
+
+            Sdk sdk = Assert.Single((await finder.FindSdksAsync(query)).Sdks);
+            Assert.Equal(olderRoot, sdk.RootPath);
+            Assert.Equal(new Version(14, 44, 35207), sdk.Version);
+            Assert.Equal(olderCompiler, sdk.CompilerPath);
+            Assert.All(
+                Assert.Single(sdk.Layouts).Resources,
+                resource => Assert.DoesNotContain(
+                    newerRoot, resource.Path, StringComparison.OrdinalIgnoreCase));
+
+            Sdk compilerOnlySdk = Assert.Single((await finder.FindSdksAsync(
+                query with { RootPath = null })).Sdks);
+            Assert.Equal(olderRoot, compilerOnlySdk.RootPath);
+            Assert.Equal(olderCompiler, compilerOnlySdk.CompilerPath);
+
+            Assert.Null(await finder.FindSdkAsync(query with
+            {
+                TargetArchitecture = TargetArchitecture.ARM64,
+            }));
+            Assert.Null(await finder.FindSdkAsync(query with
+            {
+                RootPath = olderRoot,
+                CompilerPath = newerCompiler,
+            }));
+        }
+        finally
+        {
+            if (Directory.Exists(environment))
+            {
+                Directory.Delete(environment, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void ResourceAndLayoutCollectionsAreDefensiveReadOnlySnapshots()
     {
         var resources = new List<Resource> { new(ResourcePurpose.Library, Root("libSystem.tbd")) };
@@ -405,6 +470,41 @@ public sealed class FinderTests
         Assert.Equal(new Version(26, 1), sdk.ProductVersion);
         Assert.Equal(new Version(15, 0), sdk.Layouts[0].MinimumDeploymentVersion);
         Assert.Equal(new Version(26, 0), sdk.Layouts[0].DefaultDeploymentVersion);
+    }
+
+    private static string CreateMsvcInstallation(
+        string root,
+        params TargetArchitecture[] architectures)
+    {
+        string include = Path.Combine(root, "include");
+        Directory.CreateDirectory(include);
+        File.WriteAllText(Path.Combine(include, "vcruntime.h"), string.Empty);
+        string? compiler = null;
+        foreach (TargetArchitecture architecture in architectures)
+        {
+            string name = architecture switch
+            {
+                TargetArchitecture.X64 => "x64",
+                TargetArchitecture.ARM64 => "arm64",
+                TargetArchitecture.X86 => "x86",
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(architectures), architecture, null),
+            };
+            string library = Path.Combine(root, "lib", name);
+            Directory.CreateDirectory(library);
+            File.WriteAllText(Path.Combine(library, "libcmt.lib"), string.Empty);
+            File.WriteAllText(
+                Path.Combine(library, "libvcruntime.lib"), string.Empty);
+            string bin = Path.Combine(root, "bin", "Hostx64", name);
+            Directory.CreateDirectory(bin);
+            string currentCompiler = Path.Combine(bin, "cl.exe");
+            File.WriteAllText(currentCompiler, string.Empty);
+            compiler ??= currentCompiler;
+        }
+
+        return compiler
+            ?? throw new ArgumentException(
+                "At least one architecture is required.", nameof(architectures));
     }
 
     private static Finder CreateFinder(params Sdk[] sdks) =>

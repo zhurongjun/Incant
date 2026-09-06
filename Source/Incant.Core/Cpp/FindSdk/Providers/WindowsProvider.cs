@@ -21,6 +21,7 @@ public sealed class WindowsProvider : IDiscoveryProvider
 
         var sdks = new List<Sdk>();
         var diagnostics = new List<Diagnostic>();
+        var recognizedInputs = new List<string>();
         if (query.Kind is null or Kind.Windows)
         {
             foreach (Candidate candidate in WindowsLocator.WindowsKits(query.RootPath, context))
@@ -39,6 +40,16 @@ public sealed class WindowsProvider : IDiscoveryProvider
 
         if (query.Kind is null or Kind.Msvc)
         {
+            string? compilerRoot = null;
+            if (query.CompilerPath is string compilerPath)
+            {
+                compilerRoot = WindowsLocator.MsvcRootForCompiler(compilerPath);
+                if (compilerRoot is not null)
+                {
+                    recognizedInputs.Add(compilerPath);
+                }
+            }
+
             IReadOnlyList<Candidate> candidates = await WindowsLocator.VisualStudiosAsync(
                 query.RootPath ?? query.CompilerPath, context, cancellationToken).ConfigureAwait(false);
             foreach (Candidate candidate in candidates)
@@ -46,8 +57,24 @@ public sealed class WindowsProvider : IDiscoveryProvider
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    foreach (string root in WindowsLocator.MsvcRoots(candidate.Path))
+                    string[] roots = WindowsLocator.MsvcRoots(candidate.Path)
+                        .Select(SearchPaths.Normalize)
+                        .Distinct(SearchPaths.Comparer)
+                        .ToArray();
+                    if (query.RootPath is not null && roots.Length > 0)
                     {
+                        recognizedInputs.Add(query.RootPath);
+                    }
+
+                    foreach (string root in roots)
+                    {
+                        if (query.CompilerPath is not null
+                            && (compilerRoot is null
+                                || !SearchPaths.Comparer.Equals(root, compilerRoot)))
+                        {
+                            continue;
+                        }
+
                         sdks.Add(InspectMsvc(root, candidate, query.CompilerPath));
                     }
                 }
@@ -58,7 +85,8 @@ public sealed class WindowsProvider : IDiscoveryProvider
             }
         }
 
-        return new DiscoveryResult(sdks, diagnostics);
+        return new DiscoveryResult(sdks, diagnostics)
+            .WithRecognizedInputs(recognizedInputs);
     }
 
     private Sdk InspectMsvc(string root, Candidate candidate, string? compilerPath)

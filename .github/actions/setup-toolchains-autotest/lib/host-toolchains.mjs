@@ -121,6 +121,8 @@ async function prepareUbuntuEnvironment(context) {
             "clang-18",
             "llvm-18",
             "lld-18",
+            "unzip",
+            "xz-utils",
         ];
         await runCommand(
             sudo,

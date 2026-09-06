@@ -11,8 +11,10 @@ internal static class ValidationStage
         AutoTestContext context,
         CancellationToken cancellationToken)
     {
-        foreach (ToolchainCandidate candidate in context.Candidates
-            .Where(candidate => candidate.Status == CandidateStatus.Resolved))
+        ToolchainCandidate[] candidates = context.Candidates
+            .Where(candidate => candidate.Status == CandidateStatus.Resolved)
+            .ToArray();
+        foreach (ToolchainCandidate candidate in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
             ValidateCandidate(context, candidate);
@@ -24,6 +26,7 @@ internal static class ValidationStage
 
         ValidateEmscriptenVariants(context);
         return Task.FromResult(context.RequiredCandidatesSatisfy(
+            candidates,
             candidate => candidate.Status == CandidateStatus.Resolved));
     }
 
@@ -65,6 +68,7 @@ internal static class ValidationStage
         {
             ValidateSdkComponent(context.Profile, candidate, toolchain, component);
         }
+        ValidateMsvcComponents(candidate, toolchain);
 
         Resource[] resources = toolchain.Resources.ToArray();
         if (!resources.Any(resource => resource.Purpose == ResourcePurpose.CInclude))
@@ -328,6 +332,51 @@ internal static class ValidationStage
         foreach (Resource resource in layout.Resources)
         {
             ValidateResource(candidate, sdk, resource);
+        }
+    }
+
+    private static void ValidateMsvcComponents(
+        ToolchainCandidate candidate,
+        ResolvedToolchain toolchain)
+    {
+        if (toolchain.AdapterKind is not BuildAdapterKind.Msvc
+            and not BuildAdapterKind.ClangCl)
+        {
+            return;
+        }
+
+        ToolSet? msvcToolSet = toolchain.AdapterKind == BuildAdapterKind.Msvc
+            ? toolchain.ToolSet
+            : toolchain.AuxiliaryToolSet;
+        if (msvcToolSet is null)
+        {
+            candidate.Invalidate(
+                "The Windows toolchain has no concrete MSVC ToolSet.");
+            return;
+        }
+
+        ResolvedSdkComponent[] components = toolchain.Sdks
+            .Where(component => component.Sdk.Kind == SdkKind.Msvc)
+            .ToArray();
+        if (components.Length != 1)
+        {
+            candidate.Invalidate(
+                $"The Windows toolchain must contain exactly one MSVC SDK component; found {components.Length}.");
+            return;
+        }
+
+        Sdk sdk = components[0].Sdk;
+        if (!ToolchainResolution.MsvcIdentityMatches(msvcToolSet, sdk))
+        {
+            candidate.Invalidate(
+                $"MSVC SDK '{sdk.RootPath}' version '{sdk.Version}' does not belong to "
+                + $"ToolSet '{msvcToolSet.RootPath}' version '{msvcToolSet.Version}'.");
+        }
+
+        if (!ToolchainResolution.CompilerMatches(msvcToolSet, sdk))
+        {
+            candidate.Invalidate(
+                "The MSVC SDK compiler identity does not match its concrete ToolSet.");
         }
     }
 

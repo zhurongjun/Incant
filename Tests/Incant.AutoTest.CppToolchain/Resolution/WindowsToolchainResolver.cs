@@ -261,13 +261,12 @@ internal static class WindowsToolchainResolver
             return;
         }
 
-        Sdk? msvcSdk = FindMsvcSdk(
-            msvcToolSet.ToolSet, msvcToolSet.Owner.Sdks);
-        if (msvcSdk is null)
+        if (FindMsvcSdk(msvcToolSet.ToolSet, msvcToolSet.Owner.Sdks) is null)
         {
             return;
         }
 
+        var msvcSdks = new Dictionary<TargetArchitecture, Sdk?>();
         foreach (InstallationDiscovery llvmOwner in Installations(
             context, InstallationKind.Llvm))
         {
@@ -278,6 +277,22 @@ internal static class WindowsToolchainResolver
                     context.Profile.WindowsLlvmArchitectures)
                 {
                     string triple = WindowsTriple(architecture);
+                    if (!msvcSdks.TryGetValue(architecture, out Sdk? msvcSdk))
+                    {
+                        msvcSdk = await FindCompilerSdkAsync(
+                            context,
+                            msvcToolSet.Owner,
+                            msvcToolSet.ToolSet,
+                            SdkKind.Msvc,
+                            TargetPlatform.Windows,
+                            architecture,
+                            triple: null,
+                            multilib: null,
+                            sysrootPath: null,
+                            cancellationToken).ConfigureAwait(false);
+                        msvcSdks.Add(architecture, msvcSdk);
+                    }
+
                     Sdk? llvmSdk = await FindCompilerSdkAsync(
                         context,
                         llvmOwner,
@@ -293,8 +308,10 @@ internal static class WindowsToolchainResolver
                         ? null
                         : FindLayout(
                             llvmSdk, TargetPlatform.Windows, architecture, triple);
-                    TargetLayout? msvcLayout = FindLayout(
-                        msvcSdk, TargetPlatform.Windows, architecture);
+                    TargetLayout? msvcLayout = msvcSdk is null
+                        ? null
+                        : FindLayout(
+                            msvcSdk, TargetPlatform.Windows, architecture);
                     TargetLayout? windowsLayout = FindLayout(
                         windowsSdk.Sdk, TargetPlatform.Windows, architecture);
 
@@ -319,6 +336,7 @@ internal static class WindowsToolchainResolver
                         context.Candidates.Add(candidate);
                         if (llvmSdk is null
                             || llvmLayout is null
+                            || msvcSdk is null
                             || msvcLayout is null
                             || windowsLayout is null)
                         {
