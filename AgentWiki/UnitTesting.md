@@ -6,7 +6,7 @@
 - 测试框架统一使用 xUnit v3，测试平台统一使用 Microsoft Testing Platform。
 - 基础设施冒烟测试只证明测试发现和执行链路有效，不计入功能覆盖。
 - `Incant.UnitTest.Base` 覆盖底层基础设施，`Incant.UnitTest.Core` 覆盖构建系统核心的确定性行为。
-- 依赖真实机器部署的工具链发现由 `Incant.AutoTest.Toolchains` 验证，不得混入单元测试。
+- 依赖真实机器部署的工具链发现由 `Incant.AutoTest.CppToolchain` 验证，不得混入单元测试。
 
 ## 编写原则
 
@@ -49,34 +49,39 @@ dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configurati
 - 筛选结果为零个测试应视为错误，不得通过忽略退出码掩盖错误的筛选条件。
 - 存在多个测试项目时，优先逐个运行受影响项目；只有退出验收、合并或发布需要时才扩大到完整测试集合。
 
-## 工具链测试
+## 工具链 AutoTest
 
-- Core 单元测试只能通过公开 Provider 接口构造受控候选，验证 Cpp.FindTools / Cpp.FindSdk 的发现调度、筛选、选择和不可变快照，不得读取本机安装、Registry 或网络。
-- 工具与 SDK 独立查找：先选择具体版本的 ToolSet，再按工具名查找；SDK 返回独立的资源布局，不在 Core 中自动配对。测试需覆盖语言路径顺序、外部引用、目标/ABI/API 隔离、取消和每次重新查询的行为。
-- `Incant.AutoTest.Toolchains` 使用 Base CLI 提供 `discover` 与 `verify` 子命令；选项应归属实际使用它的子命令，不在入口处手工解析或堆叠无关选项。
-- `discover` 用于检查实际发现结果；`verify` 对种类、目标、架构、版本和组件设置明确门禁，由 AutoTest 显式组合工具、平台 SDK 和编译器开发文件，再分别编译、链接 C 与 C++ HelloWorld。
-- 内置 Provider 的安装布局和只读驱动探测只在 AutoTest 验证；重点关注 Xcode/CLT、独立编译器与 Apple SDK、Linux multiarch/multilib、NDK 按 ABI 的 API、缺失可选资源和错误显式路径。不得将未运行的宿主验证报告为已通过。
-- `verify clang-cl msvc-link` 与 `verify clang-cl llvm-link` 分别验证 clang-cl 配合 MSVC 和 LLVM Windows 链接器的真实构建路径。
-- `verify` 对当前宿主可直接运行的原生产物继续执行冒烟；Emscripten 或 WASI 只有在本机存在对应运行时才执行，其他交叉编译产物只验证构建成功。
-- AutoTest 不负责下载、安装或修改全局环境；工具链准备由 CI Job 负责，编译使用临时目录并在结束时清理。
+- Core 单元测试只通过公开 Provider 接口构造受控候选，验证 Cpp.FindTools / Cpp.FindSdk 的调度、筛选、选择、目标别名和不可变快照；不得读取本机安装、Registry 或网络。
+- 依赖真实安装的验证统一由 `Incant.AutoTest.CppToolchain` 承担。它不提供自由组合的发现参数，而是公开 `windows-vs2022`、`windows-vs2026`、`ubuntu-24.04` 和 `macos-15-arm64` 四个完整环境 Profile。
+- 每个 Profile 固定环境要求、安装范围、目标组合和执行能力，并依次运行 `Preflight`、`Discover`、`Resolve`、`Validate`、`Build` 和 `Execute`。候选之间互不回退；某个候选失败只跳过依赖它的动作。
+- CI Setup 写出 schema version 1 的环境清单，记录实际安装根目录、版本、来源、局部环境和运行时。AutoTest 将这些路径作为候选边界，并通过 Finder 重新确认身份。
+- 每个声明安装均执行无约束、种类、版本和显式根目录发现，比较身份快照，并覆盖不存在路径、错误版本和错误目标等负向行为。
+- 固定签入的 C/C++ 资产用于编译多个对象、创建和检查静态库、链接纯 C 程序、构建共享库、链接 C++ 程序及运行可执行产物。Emscripten 另测默认与 `pic`/side-module 布局；WASI 使用 Wasmtime 执行。
+- AutoTest 只读取环境清单和安装，不下载依赖或修改全局环境。额外 SDK 由 `.github/actions/setup-toolchains-autotest` 安装到 `build/toolchains`，各候选的环境变量仅传给对应进程。
+- 报告总是在 `finally` 中写出，包含完整发现结果、候选决策、诊断、动作、退出码、耗时、日志和产物。宿主/清单配置错误返回 2，测试失败返回 1，成功返回 0，取消返回 130。
+- 本机只能声明实际执行过的 Profile；四个 GitHub runner 的 matrix 结果才构成跨平台功能验收。
 
 ```shell
 # Core 局部单元测试
 dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Cpp.FindTools.FinderTests
 
-# SDK 资源与查询语义的局部测试
+# SDK 资源、查询语义与 WASI 目标别名测试
 dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Cpp.FindSdk.FinderTests
 
 # Core 完整单元测试
 dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj
 
-# 查看当前机器的工具链目录
-dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj -- discover
+# 使用 CI Setup 生成的清单运行一个完整环境 Profile
+Incant.AutoTest.CppToolchain windows-vs2022
+Incant.AutoTest.CppToolchain windows-vs2026
+Incant.AutoTest.CppToolchain ubuntu-24.04
+Incant.AutoTest.CppToolchain macos-15-arm64
 
-# 验证当前机器至少存在一个可用于 x64 GCC 冒烟的安装
-dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj -- verify --kind Gnu --target Linux --arch X64 --minimum 1
-
-# 分别验证 clang-cl 的两个 Windows 链接器变种
-dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj -- verify clang-cl msvc-link --arch X64
-dotnet run --project Tests/Incant.AutoTest.Toolchains/Incant.AutoTest.Toolchains.csproj -- verify clang-cl llvm-link --arch X64
+# 本地调试时可显式指定清单、报告和工作目录
+dotnet run --project Tests/Incant.AutoTest.CppToolchain/Incant.AutoTest.CppToolchain.csproj -- \
+  ubuntu-24.04 \
+  --environment build/toolchain-environments/ubuntu-24.04.json \
+  --report build/toolchain-reports/ubuntu-24.04.json \
+  --work-root build/toolchain-autotest/ubuntu-24.04 \
+  --keep-work
 ```

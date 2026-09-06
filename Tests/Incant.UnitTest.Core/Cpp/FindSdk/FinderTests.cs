@@ -99,6 +99,29 @@ public sealed class FinderTests
         Assert.Equal(TargetArchitecture.ARM64, Assert.Single(result!.Layouts).Architecture);
     }
 
+    [Theory]
+    [InlineData("wasm32-wasi", "wasm32-wasip1")]
+    [InlineData("wasm32-unknown-wasi", "wasm32-wasip1")]
+    [InlineData("wasm32-wasi-threads", "wasm32-wasip1-threads")]
+    public async Task WasiPreviewOneLegacyTripleAliasesMatchModernSpelling(string requested, string installed)
+    {
+        var sdk = new Sdk(Kind.WasiSdk, Root("wasi"),
+            [new TargetLayout(TargetPlatform.Wasi, TargetArchitecture.Wasm32, targetTriple: installed)]);
+        Sdk? result = await CreateFinder(sdk).FindSdkAsync(Query() with { TargetTriple = requested });
+        Assert.Equal(installed, Assert.Single(result!.Layouts).TargetTriple);
+    }
+
+    [Theory]
+    [InlineData("wasm32-wasip2")]
+    [InlineData("wasm32-wasip3")]
+    [InlineData("wasm32-wasip1-threads")]
+    public async Task DistinctWasiTargetsDoNotMatchPreviewOne(string requested)
+    {
+        var sdk = new Sdk(Kind.WasiSdk, Root("wasi"),
+            [new TargetLayout(TargetPlatform.Wasi, TargetArchitecture.Wasm32, targetTriple: "wasm32-wasip1")]);
+        Assert.Null(await CreateFinder(sdk).FindSdkAsync(Query() with { TargetTriple = requested }));
+    }
+
     [Fact]
     public async Task VersionUnknownRemainsUnknownAndDoesNotMatchVersionConstraint()
     {

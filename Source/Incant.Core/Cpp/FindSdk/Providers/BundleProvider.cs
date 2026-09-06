@@ -29,8 +29,9 @@ public sealed class BundleProvider : IDiscoveryProvider
             _ => BundleKind.WasiSdk,
         };
         BundleDiscoveryResult found = await BundleLocator.FindAsync(bundleKind, query.RootPath, context, cancellationToken).ConfigureAwait(false);
-        DiscoveryResult[] results = await Task.WhenAll(found.Installations.Select(installation =>
-            Task.Run(() => InspectAsync(kind, installation, cancellationToken), cancellationToken))).ConfigureAwait(false);
+        DiscoveryResult[] results = await Task.WhenAll(
+            found.Installations.Select(installation => InspectAsync(
+                kind, installation, cancellationToken))).ConfigureAwait(false);
         return new DiscoveryResult(results.SelectMany(result => result.Sdks),
             found.Diagnostics.Concat(results.SelectMany(result => result.Diagnostics)));
     }
@@ -55,8 +56,13 @@ public sealed class BundleProvider : IDiscoveryProvider
             }
             else
             {
-                IReadOnlyList<Resource> resources = Resources.Sysroot(installation.Sysroot, "wasm32-wasi");
-                layouts.Add(new TargetLayout(TargetPlatform.Wasi, TargetArchitecture.Wasm32, resources, "wasm32-wasi",
+                string targetTriple = installation.TargetTriple
+                    ?? WasiTargetResolver.Preview1Triple;
+                string resourceTriple = WasiTargetResolver.ResolveResourceTriple(
+                    installation.Sysroot, targetTriple);
+                IReadOnlyList<Resource> resources = Resources.Sysroot(
+                    installation.Sysroot, resourceTriple);
+                layouts.Add(new TargetLayout(TargetPlatform.Wasi, TargetArchitecture.Wasm32, resources, targetTriple,
                     installation.Sysroot, diagnostics: MissingGroups(resources, installation.Sysroot)));
             }
         }

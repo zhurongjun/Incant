@@ -30,8 +30,9 @@ public sealed class BundleProvider : IDiscoveryProvider
             _ => BundleKind.WasiSdk,
         };
         BundleDiscoveryResult found = await BundleLocator.FindAsync(bundleKind, query.RootPath, context, cancellationToken).ConfigureAwait(false);
-        DiscoveryResult[] results = await Task.WhenAll(found.Installations.Select(installation =>
-            Task.Run(() => InspectAsync(kind, installation, context, cancellationToken), cancellationToken))).ConfigureAwait(false);
+        DiscoveryResult[] results = await Task.WhenAll(
+            found.Installations.Select(installation => InspectAsync(
+                kind, installation, context, cancellationToken))).ConfigureAwait(false);
         return new DiscoveryResult(results.SelectMany(result => result.ToolSets),
             found.Diagnostics.Concat(results.SelectMany(result => result.Diagnostics)));
     }
@@ -62,7 +63,7 @@ public sealed class BundleProvider : IDiscoveryProvider
         string? triple = kind switch
         {
             Kind.Emscripten => "wasm32-unknown-emscripten",
-            Kind.WasiSdk => "wasm32-wasi",
+            Kind.WasiSdk => installation.TargetTriple,
             _ => null,
         };
         return new DiscoveryResult([new DirectoryToolSet(kind, installation.Root, installation.Root,

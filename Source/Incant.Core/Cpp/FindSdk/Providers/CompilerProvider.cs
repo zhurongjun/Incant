@@ -1,3 +1,4 @@
+using Incant.Base;
 using Incant.Core.Cpp;
 
 namespace Incant.Core.Cpp.FindSdk;
@@ -60,14 +61,34 @@ public sealed class CompilerProvider : IDiscoveryProvider
 
             if (query.Kind is null or Kind.AppleClang)
             {
-                foreach (Candidate developer in await AppleLocator.EnvironmentsAsync(query.RootPath, context, cancellationToken).ConfigureAwait(false))
+                foreach (Candidate developer in await AppleLocator.EnvironmentsAsync(
+                    query.RootPath, context, cancellationToken).ConfigureAwait(false))
                 {
-                    foreach (string root in SearchPaths.Directories(Path.Combine(developer.Path, "Toolchains")).Append(developer.Path))
+                    IReadOnlyDictionary<string, string?> environment =
+                        AppleLocator.Environment(developer.Path);
+                    ProcessResult? product = Directory.Exists(
+                        Path.Combine(developer.Path, "Platforms"))
+                        ? await context.ProbeAsync(
+                            "/usr/bin/xcodebuild",
+                            ["-version"],
+                            cancellationToken,
+                            environment).ConfigureAwait(false)
+                        : null;
+                    Version? productVersion = SearchPaths.Version(product?.StandardOutput);
+                    Channel channel = SearchPaths.Channel(
+                        string.Join(' ', developer.Path, product?.StandardOutput));
+                    foreach (string root in SearchPaths.Directories(
+                        Path.Combine(developer.Path, "Toolchains")).Append(developer.Path))
                     {
-                        string? compiler = SearchPaths.Executable(Path.Combine(root, "usr", "bin"), "clang");
+                        string? compiler = SearchPaths.Executable(
+                            Path.Combine(root, "usr", "bin"), "clang");
                         if (compiler is not null)
                         {
-                            candidates.Add(new Candidate(compiler, developer.Sources.Min()));
+                            candidates.Add(new Candidate(
+                                compiler,
+                                developer.Sources.Min(),
+                                productVersion,
+                                channel));
                         }
                     }
                 }
@@ -100,11 +121,63 @@ public sealed class CompilerProvider : IDiscoveryProvider
             CompilerTargets targets = await compiler.FindTargetsAsync(query, cancellationToken).ConfigureAwait(false);
             Task<TargetLayout>[] tasks = targets.Targets.Select(target => CollectAsync(target, cancellationToken)).ToArray();
             TargetLayout[] layouts = await Task.WhenAll(tasks).ConfigureAwait(false);
-            string root = targets.Targets.Select(target => target.ResourceDirectory).FirstOrDefault(path => path is not null)
+            var diagnostics = new List<Diagnostic>(targets.Diagnostics);
+            string root = targets.Targets.Select(target => target.ResourceDirectory)
+                .FirstOrDefault(path => path is not null)
                 ?? compiler.Prefix;
-            return new DiscoveryResult([new Sdk(kind, root, layouts, compiler.Version, compiler.Prefix,
-                candidate.ProductVersion, candidate.Path, candidate.Channel ?? SearchPaths.Channel(compiler.IdentityText),
-                candidate.Sources, targets.Diagnostics)]);
+            string? developerPath = compiler.IsApple
+                ? AppleLocator.FindDeveloper(compiler.ResolvedPath)
+                : null;
+            if (compiler.IsApple && developerPath is null)
+            {
+                diagnostics.Add(new Diagnostic(
+                    DiagnosticSeverity.Warning,
+                    "unknown-developer-environment",
+                    Name,
+                    "The Apple compiler could not be assigned to an Xcode or Command Line Tools environment.",
+                    compiler.ResolvedPath));
+            }
+
+            Version? productVersion = candidate.ProductVersion;
+            string? productIdentity = null;
+            if (developerPath is not null
+                && productVersion is null
+                && Directory.Exists(Path.Combine(developerPath, "Platforms")))
+            {
+                ProcessResult? product = await context.ProbeAsync(
+                    "/usr/bin/xcodebuild",
+                    ["-version"],
+                    cancellationToken,
+                    AppleLocator.Environment(developerPath)).ConfigureAwait(false);
+                productIdentity = product?.StandardOutput;
+                productVersion = SearchPaths.Version(productIdentity);
+                if (productVersion is null)
+                {
+                    diagnostics.Add(new Diagnostic(
+                        DiagnosticSeverity.Warning,
+                        "unknown-product-version",
+                        Name,
+                        "The Xcode product version could not be established.",
+                        developerPath));
+                }
+            }
+
+            string environmentPath = compiler.IsApple
+                ? developerPath ?? root
+                : compiler.Prefix;
+            Channel channel = candidate.Channel ?? SearchPaths.Channel(
+                string.Join(' ', developerPath, productIdentity, compiler.IdentityText));
+            return new DiscoveryResult([new Sdk(
+                kind,
+                root,
+                layouts,
+                compiler.Version,
+                environmentPath,
+                productVersion,
+                candidate.Path,
+                channel,
+                candidate.Sources,
+                diagnostics)]);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

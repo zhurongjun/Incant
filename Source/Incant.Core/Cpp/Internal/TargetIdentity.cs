@@ -78,6 +78,14 @@ internal sealed partial record TargetIdentity(string Triple)
         {
             canonical = canonical.Replace("-androideabi", "-android", StringComparison.Ordinal);
         }
+        else if (canonical == WasiTargetResolver.LegacyPreview1Triple)
+        {
+            canonical = WasiTargetResolver.Preview1Triple;
+        }
+        else if (canonical.StartsWith(WasiTargetResolver.LegacyPreview1Triple + "-", StringComparison.Ordinal))
+        {
+            canonical = WasiTargetResolver.Preview1Triple + canonical[WasiTargetResolver.LegacyPreview1Triple.Length..];
+        }
 
         return DeploymentPattern().Replace(canonical, match =>
         {
@@ -96,6 +104,6 @@ internal sealed partial record TargetIdentity(string Triple)
     [GeneratedRegex(@"(?<=-)(macosx|macos|ios|tvos|watchos|xros|darwin)(\d+(?:\.\d+)*)(?=-|$)", RegexOptions.CultureInvariant)]
     private static partial Regex DeploymentPattern();
 
-    [GeneratedRegex(@"(?:musleabihf|musleabi|muslx32|musl|gnueabihf|gnueabi|gnux32|gnu|androideabi|android|msvc|wasi(?:p[12])?|emscripten)(?=-|\d|$)", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?:musleabihf|musleabi|muslx32|musl|gnueabihf|gnueabi|gnux32|gnu|androideabi|android|msvc|wasi(?:p[123])?|emscripten)(?=-|\d|$)", RegexOptions.CultureInvariant)]
     private static partial Regex AbiPattern();
 }

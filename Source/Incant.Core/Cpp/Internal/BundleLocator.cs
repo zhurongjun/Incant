@@ -11,7 +11,7 @@ internal enum BundleKind
 
 internal sealed record BundleInstallation(
     BundleKind Kind, Candidate Candidate, string Root, string Bin, string? Compiler,
-    string Sysroot, Version? Version, Channel Channel);
+    string Sysroot, Version? Version, Channel Channel, string? TargetTriple = null);
 
 internal sealed record BundleDiscoveryResult(
     IReadOnlyList<BundleInstallation> Installations, IReadOnlyList<Diagnostic> Diagnostics);
@@ -114,8 +114,10 @@ internal static partial class BundleLocator
             }
         }
 
-        BundleDiscoveryResult[] results = await Task.WhenAll(Candidate.Merge(candidates).Select(candidate =>
-            Task.Run(() => InspectCandidateAsync(kind, candidate, context, cancellationToken), cancellationToken))).ConfigureAwait(false);
+        BundleDiscoveryResult[] results = await Task.WhenAll(
+            Candidate.Merge(candidates).Select(candidate =>
+                InspectCandidateAsync(
+                    kind, candidate, context, cancellationToken))).ConfigureAwait(false);
         BundleInstallation[] installations = results.SelectMany(result => result.Installations)
             .GroupBy(installation => installation.Root, SearchPaths.Comparer)
             .Select(group =>
@@ -136,8 +138,9 @@ internal static partial class BundleLocator
         try
         {
             string[] roots = ExpandRoots(kind, candidate.Path).Distinct(SearchPaths.Comparer).ToArray();
-            BundleDiscoveryResult[] results = await Task.WhenAll(roots.Select(root =>
-                InspectRootAsync(kind, root, candidate, context, cancellationToken))).ConfigureAwait(false);
+            BundleDiscoveryResult[] results = await Task.WhenAll(
+                roots.Select(root => InspectRootAsync(
+                    kind, root, candidate, context, cancellationToken))).ConfigureAwait(false);
             return new BundleDiscoveryResult(results.SelectMany(result => result.Installations).ToArray(),
                 results.SelectMany(result => result.Diagnostics).ToArray());
         }
@@ -205,9 +208,13 @@ internal static partial class BundleLocator
 
             string? compiler = SearchPaths.Executable(bin, kind == BundleKind.Emscripten ? "emcc" : "clang",
                 wrappers: kind == BundleKind.Emscripten);
+            Version? version = SearchPaths.Version(revision);
+            string? targetTriple = kind == BundleKind.WasiSdk
+                ? await WasiTargetResolver.ResolveAsync(root, compiler, version, context, cancellationToken).ConfigureAwait(false)
+                : null;
             Channel channel = revision is not null ? SearchPaths.Channel(revision) : SearchPaths.Channel(root);
             return new BundleDiscoveryResult([new BundleInstallation(kind, candidate, SearchPaths.Normalize(root), bin,
-                compiler, sysroot, SearchPaths.Version(revision), channel)], []);
+                compiler, sysroot, version, channel, targetTriple)], []);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -259,8 +266,11 @@ internal static partial class BundleLocator
         };
         string directory = Path.Combine(root, "toolchains", "llvm", "prebuilt");
         return names.Select(name => Path.Combine(directory, name)).FirstOrDefault(Directory.Exists)
-            ?? SearchPaths.Directories(directory).OrderBy(path => HostArchitecture(Path.GetFileName(path)) == context.HostArchitecture ? 0 : 1)
-                .ThenBy(path => path, SearchPaths.Comparer).FirstOrDefault();
+            ?? SearchPaths.Directories(directory)
+                .Where(path => HostArchitecture(Path.GetFileName(path))
+                    == context.HostArchitecture)
+                .OrderBy(path => path, SearchPaths.Comparer)
+                .FirstOrDefault();
     }
 
     private static TargetArchitecture HostArchitecture(string name) => name switch

@@ -55,7 +55,7 @@ public sealed class SystemProvider : IDiscoveryProvider
 
                 TargetLayout layout = await CollectCompilerLayoutAsync(target, root, cancellationToken).ConfigureAwait(false);
                 sdks.Add(new Sdk(isNativeRoot ? Kind.Linux : Kind.Sysroot, root, [layout], compilerPath: query.CompilerPath,
-                    sources: [explicitRoot is not null ? Source.Explicit : Source.Environment]));
+                    sources: [Source.Explicit]));
             }
 
             return new DiscoveryResult(sdks, diagnostics).WithRecognizedInputs(explicitRoot is null ? [query.CompilerPath] : [query.CompilerPath, explicitRoot]);
