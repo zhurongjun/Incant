@@ -45,24 +45,13 @@ internal static partial class WasiTargetResolver
         return version?.Major >= 33 ? Preview1Triple : LegacyPreview1Triple;
     }
 
-    internal static string ResolveResourceTriple(string sysroot, string targetTriple)
+    internal static IReadOnlyList<string> ResourceTriples(string targetTriple)
     {
         string canonical = new TargetIdentity(targetTriple).Canonical;
-        IEnumerable<string> candidates = canonical == Preview1Triple
+        string[] candidates = canonical == Preview1Triple
             ? [targetTriple, Preview1Triple, LegacyPreview1Triple]
             : [targetTriple];
-        foreach (string candidate in candidates.Distinct(StringComparer.Ordinal))
-        {
-            if (Directory.Exists(Path.Combine(sysroot, "usr", "lib", candidate))
-                || Directory.Exists(Path.Combine(sysroot, "lib", candidate))
-                || Directory.Exists(Path.Combine(sysroot, "include", candidate))
-                || Directory.Exists(Path.Combine(sysroot, "usr", "include", candidate)))
-            {
-                return candidate;
-            }
-        }
-
-        return targetTriple;
+        return candidates.Distinct(StringComparer.Ordinal).ToArray();
     }
 
     private static string? ExtractTarget(string? value)

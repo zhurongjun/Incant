@@ -1,16 +1,21 @@
+using System.Text;
 using System.Text.Json;
+using Incant.TestSupport;
 
 namespace Incant.UnitTest.Core.Cpp;
 
 internal sealed class CompilerFixture : IDisposable
 {
-    internal CompilerFixture()
+    private readonly TestDirectory _directory;
+
+    private readonly List<string> _compilers = [];
+
+    internal CompilerFixture(string? parent = null)
     {
-        Root = Path.Combine(Path.GetTempPath(), "Incant.UnitTest.Core", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Root);
+        _directory = new TestDirectory(parent);
     }
 
-    internal string Root { get; }
+    internal string Root => _directory.Root;
 
     internal string DirectoryPath(string relative)
     {
@@ -30,36 +35,47 @@ internal sealed class CompilerFixture : IDisposable
     internal string Compiler(string relative, IReadOnlyDictionary<string, object>? values = null)
     {
         string path = Path.GetFullPath(Path.Combine(Root, relative + (OperatingSystem.IsWindows() ? ".exe" : "")));
-        string directory = Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(directory);
-        string configuration = new DirectoryInfo(AppContext.BaseDirectory).Name;
-        string helper = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..",
-            "Incant.ProcessTestHelper", configuration));
-        foreach (string file in Directory.EnumerateFiles(helper))
-        {
-            if (Path.GetExtension(file) is ".dll" or ".json")
-            {
-                File.Copy(file, Path.Combine(directory, Path.GetFileName(file)), overwrite: true);
-            }
-        }
-
-        File.Copy(Path.Combine(helper, "Incant.ProcessTestHelper" + (OperatingSystem.IsWindows() ? ".exe" : "")), path);
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        }
-
+        _ = CompilerTestHost.CreateEnvironment();
+        CompilerTestHost.CopyTo(path);
         Configure(path, values ?? new Dictionary<string, object>());
+        _compilers.Add(path);
         return path;
     }
 
     internal static void Configure(string path, IReadOnlyDictionary<string, object> values) =>
         File.WriteAllText(path + ".compiler.json", JsonSerializer.Serialize(values));
 
-    internal static IReadOnlyDictionary<string, string?> Environment() => new Dictionary<string, string?>();
+    internal static IReadOnlyList<CompilerInvocation> Invocations(string compiler) =>
+        CompilerInvocationStore.Read(compiler + ".compiler.json.invocations");
+
+    internal static IReadOnlyDictionary<string, string?> Environment() => CompilerTestHost.CreateEnvironment();
 
     public void Dispose()
     {
-        Directory.Delete(Root, recursive: true);
+        foreach (string compiler in _compilers)
+        {
+            string directory = compiler + ".compiler.json.invocations";
+            var evidence = new StringBuilder();
+            evidence.AppendLine(compiler);
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    foreach (string file in Directory.EnumerateFiles(directory, "*.json").Order(StringComparer.Ordinal))
+                    {
+                        evidence.AppendLine(Path.GetFileName(file)).AppendLine(File.ReadAllText(file));
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                evidence.AppendLine($"Could not read invocation evidence: {exception.Message}");
+            }
+
+            TestContext.Current.AddAttachment($"compiler-{Path.GetFileName(Root)}-{Path.GetRelativePath(Root, compiler)}",
+                evidence.ToString());
+        }
+
+        _directory.Dispose();
     }
 }

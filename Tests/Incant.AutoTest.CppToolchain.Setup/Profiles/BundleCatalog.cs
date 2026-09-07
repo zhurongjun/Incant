@@ -23,7 +23,8 @@ internal sealed record EmscriptenHostPackage(
 internal sealed record WasiRelease(
     int Version,
     string Platform,
-    string Sha256);
+    string Sha256,
+    IReadOnlyList<string> RequiredFiles);
 
 internal sealed record WasmtimeRelease(
     string Version,
@@ -34,6 +35,21 @@ internal sealed record WasmtimeRelease(
 
 internal static class BundleCatalog
 {
+    // These files describe the pinned dual-exception WASIp1 distributions, independently of Finder.
+    private static readonly IReadOnlyList<string> s_wasiPreview1Files = Array.AsReadOnly(new[]
+    {
+        "include/wasm32-wasip1/stdio.h",
+        "include/wasm32-wasip1/noeh/c++/v1/array",
+        "include/wasm32-wasip1/eh/c++/v1/array",
+        "lib/wasm32-wasip1/libc.a",
+        "lib/wasm32-wasip1/crt1-command.o",
+        "lib/wasm32-wasip1/noeh/libc++.a",
+        "lib/wasm32-wasip1/noeh/libc++abi.a",
+        "lib/wasm32-wasip1/eh/libc++.a",
+        "lib/wasm32-wasip1/eh/libc++abi.a",
+        "lib/wasm32-wasip1/eh/libunwind.a",
+    });
+
     internal const string EmsdkRevision = "5eb0bde7585670252e8ba05e9d361627bffd08b5";
     internal const string EmsdkUri = "https://github.com/emscripten-core/emsdk.git";
     internal const string EmscriptenPackageRoot =
@@ -115,14 +131,16 @@ internal static class BundleCatalog
             HostValue(
                 "df14ca2a2127c2d6b6be07e6f5549b3af9c1b3c0112430c200a4749970c59f06",
                 "0ba8b5bfaeb2adf3f29bab5841d76cf5318ab8e1642ea195f88baba1abd47bce",
-                "85c997a2665ead91673b5bb88b7d0df3fc8900df3bfa244f720d478187bbdc78")),
+                "85c997a2665ead91673b5bb88b7d0df3fc8900df3bfa244f720d478187bbdc78"),
+            s_wasiPreview1Files),
         new(
             34,
             HostValue("x86_64-windows", "x86_64-linux", "arm64-macos"),
             HostValue(
                 "cccb5c323a9b34f0349a9b09e8804a0a7632c68c3310f4b5f437ed57d7e71d8f",
                 "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4",
-                "9c59398106b417f8f14913380fdf0097a8cc0ff4af9eb3ce0065a859e88d49e9")),
+                "9c59398106b417f8f14913380fdf0097a8cc0ff4af9eb3ce0065a859e88d49e9"),
+            s_wasiPreview1Files),
     ];
 
     internal static WasmtimeRelease Wasmtime => OperatingSystem.IsWindows()

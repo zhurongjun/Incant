@@ -1,6 +1,6 @@
-using System.Text.Json;
 using Incant.Core.Cpp;
 using Incant.Core.Cpp.FindSdk;
+using Incant.TestSupport;
 
 namespace Incant.UnitTest.Core.Cpp.FindSdk;
 
@@ -21,15 +21,23 @@ public sealed class CompilerResourceTests
 
         TargetLayout initial = Assert.Single((await FindAsync(compiler)).Layouts);
         Assert.Null(initial.SysrootPath);
-        string log = compiler + ".compiler.json.arguments";
-        Assert.DoesNotContain(ReadArguments(log), argument => argument.StartsWith("--sysroot=", StringComparison.Ordinal));
-        File.WriteAllText(log, "");
+        IReadOnlyList<CompilerInvocation> initialInvocations = CompilerFixture.Invocations(compiler);
+        Assert.DoesNotContain(initialInvocations.SelectMany(invocation => invocation.Arguments),
+            argument => argument.StartsWith("--sysroot=", StringComparison.Ordinal));
 
         string root = Path.GetPathRoot(fixture.Root)!;
         TargetLayout explicitRoot = Assert.Single((await FindAsync(compiler, root, initial.TargetTriple)).Layouts);
         Assert.Equal(root, explicitRoot.SysrootPath);
-        Assert.Contains("--sysroot=" + root, ReadArguments(log));
-        Assert.Contains("--target=" + initial.TargetTriple, ReadArguments(log));
+        CompilerInvocation[] targetedInvocations = CompilerFixture.Invocations(compiler)
+            .ExceptBy(initialInvocations.Select(invocation => invocation.Id), invocation => invocation.Id).ToArray();
+        Assert.Contains("--sysroot=" + root, targetedInvocations.SelectMany(invocation => invocation.Arguments));
+        Assert.Contains("--target=" + initial.TargetTriple, targetedInvocations.SelectMany(invocation => invocation.Arguments));
+        Assert.All(initialInvocations.Concat(targetedInvocations), invocation =>
+        {
+            Assert.NotNull(invocation.CompletedTimestamp);
+            Assert.Equal(0, invocation.ExitCode);
+        });
+        Assert.Equal(targetedInvocations.Length, targetedInvocations.Select(invocation => invocation.Id).Distinct().Count());
         Assert.Equal(initial.Resources.Select(resource => resource.Path), explicitRoot.Resources.Select(resource => resource.Path));
     }
 
@@ -141,8 +149,31 @@ public sealed class CompilerResourceTests
             && diagnostic.Message.Contains("-v", StringComparison.Ordinal));
     }
 
-    private static string[] ReadArguments(string path) =>
-        File.ReadAllLines(path).SelectMany(line => JsonSerializer.Deserialize<string[]>(line)!).ToArray();
+    [Fact]
+    public async Task AncestorLinksDoNotChangeResourceIdentityOrTheExplicitCompilerEntry()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "This fixture requires Unix symbolic links.");
+        using var parent = new CompilerFixture();
+        string physical = parent.DirectoryPath("physical");
+        string alias = Path.Combine(parent.Root, "alias");
+        Directory.CreateSymbolicLink(alias, "physical");
+        using var fixture = new CompilerFixture(alias);
+        Assert.StartsWith(physical + Path.DirectorySeparatorChar, fixture.Root);
+        string include = fixture.DirectoryPath("include");
+        string reportedInclude = Path.Combine(alias, Path.GetRelativePath(physical, include));
+        string compiler = fixture.Compiler("bin/clang-18", new Dictionary<string, object>
+        {
+            ["CppIncludes"] = new[] { reportedInclude, include },
+            ["CIncludes"] = new[] { reportedInclude },
+            ["Resource"] = fixture.DirectoryPath("resources"),
+        });
+        string compilerEntry = Path.Combine(alias, Path.GetRelativePath(physical, compiler));
+
+        Sdk sdk = await FindAsync(compilerEntry);
+        Assert.Equal(compilerEntry, sdk.CompilerPath);
+        Assert.Single(Assert.Single(sdk.Layouts).Resources,
+            resource => resource.Purpose == ResourcePurpose.CppInclude && resource.Path == include);
+    }
 
     private static async Task<Sdk> FindAsync(string compiler, string? sysroot = null, string? triple = null)
     {

@@ -519,17 +519,9 @@ public sealed class CompilerProviderTests
 
     private sealed class SyntheticInstallation : IDisposable
     {
-        internal SyntheticInstallation()
-        {
-            RootPath = Path.Combine(
-                Path.GetTempPath(),
-                "Incant.UnitTest.Core",
-                "CompilerProvider",
-                Guid.NewGuid().ToString("N"));
-            System.IO.Directory.CreateDirectory(RootPath);
-        }
+        private readonly TestDirectory _directory = new();
 
-        internal string RootPath { get; }
+        internal string RootPath => _directory.Root;
 
         internal string Directory(string relativePath)
         {
@@ -673,13 +665,7 @@ printf '%s\n' '{{version}}'
             File.WriteAllBytes(path, image);
         }
 
-        public void Dispose()
-        {
-            if (System.IO.Directory.Exists(RootPath))
-            {
-                System.IO.Directory.Delete(RootPath, recursive: true);
-            }
-        }
+        public void Dispose() => _directory.Dispose();
 
         private static void WriteScript(string path, string content)
         {

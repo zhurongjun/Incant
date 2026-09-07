@@ -11,7 +11,7 @@ internal static class DriverArguments
     {
         var arguments = new List<string>();
         arguments.AddRange(TargetArguments(toolchain));
-        arguments.AddRange(MultilibArguments(toolchain.Multilib));
+        arguments.AddRange(VariantArguments(toolchain));
         arguments.Add(cpp ? "-std=c++17" : "-std=c11");
         if (positionIndependent)
         {
@@ -39,7 +39,7 @@ internal static class DriverArguments
     {
         var arguments = new List<string>();
         arguments.AddRange(TargetArguments(toolchain));
-        arguments.AddRange(MultilibArguments(toolchain.Multilib));
+        arguments.AddRange(VariantArguments(toolchain));
         foreach (string directory in DriverResourceArguments.LinkDirectories(
             toolchain))
         {
@@ -133,12 +133,24 @@ internal static class DriverArguments
         return arguments;
     }
 
-    internal static IReadOnlyList<string> MultilibArguments(string? multilib) =>
-        multilib switch
+    private static IReadOnlyList<string> VariantArguments(ResolvedToolchain toolchain)
+    {
+        if (toolchain.AdapterKind == BuildAdapterKind.Wasi)
+        {
+            return toolchain.Multilib switch
+            {
+                null or "." => ["-fno-exceptions"],
+                "eh" => ["-fwasm-exceptions", "-mllvm", "-wasm-use-legacy-eh=false"],
+                _ => throw new NotSupportedException($"Unknown WASI variant '{toolchain.Multilib}'."),
+            };
+        }
+
+        return toolchain.Multilib switch
         {
             "32" => ["-m32"],
             "64" => ["-m64"],
             "x32" => ["-mx32"],
             _ => [],
         };
+    }
 }

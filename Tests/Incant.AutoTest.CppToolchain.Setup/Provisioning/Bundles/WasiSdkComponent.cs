@@ -18,29 +18,19 @@ internal sealed class WasiSdkComponent(WasiRelease release) : ISetupComponent
         string archive = await context.Downloads.GetAsync(
             uri, release.Sha256, cancellationToken).ConfigureAwait(false);
         string executableSuffix = OperatingSystem.IsWindows() ? ".exe" : string.Empty;
+        InstallationProbe[] probes =
+        [
+            new(Path.Combine("bin", $"clang{executableSuffix}"), ProbeKind.File),
+            new(Path.Combine("bin", $"clang++{executableSuffix}"), ProbeKind.File),
+            new(Path.Combine("bin", $"llvm-ar{executableSuffix}"), ProbeKind.File),
+            .. release.RequiredFiles.Select(relative => new InstallationProbe(
+                Path.Combine("share", "wasi-sysroot", relative), ProbeKind.File)),
+        ];
         string root = await context.Archives.InstallAsync(
             Id,
             archive,
             Path.Combine(context.Options.ToolchainRoot, Id),
-            [
-                new(Path.Combine("bin", $"clang{executableSuffix}"), ProbeKind.File),
-                new(Path.Combine("bin", $"llvm-ar{executableSuffix}"), ProbeKind.File),
-                new(
-                    Path.Combine(
-                        "share",
-                        "wasi-sysroot",
-                        "include",
-                        "wasm32-wasip1",
-                        "stdio.h"),
-                    ProbeKind.File),
-                new(
-                    Path.Combine(
-                        "share",
-                        "wasi-sysroot",
-                        "lib",
-                        "wasm32-wasip1"),
-                    ProbeKind.Directory),
-            ],
+            probes,
             release.Sha256,
             cancellationToken).ConfigureAwait(false);
         return ProvisioningResult.ForInstallation(new InstallationManifest

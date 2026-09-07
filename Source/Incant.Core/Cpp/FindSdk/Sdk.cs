@@ -191,7 +191,11 @@ public sealed class TargetLayout
         }
     }
 
-    /// <summary>Gets the installed library variant identifier: a GCC multilib or bundle-relative library directory. A dot identifies the default variant; null means no variant classification.</summary>
+    /// <summary>
+    /// Gets the installed library variant identifier: a GCC multilib, Emscripten library directory,
+    /// or WASI exception layout. A dot identifies the default variant (noeh for classified WASI layouts);
+    /// eh identifies the WASI exception variant. Null means no variant classification.
+    /// </summary>
     public string? Multilib { get; }
 
     /// <summary>Gets the SDK metadata's minimum deployment version, without selecting a build deployment target.</summary>

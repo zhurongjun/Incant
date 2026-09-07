@@ -233,7 +233,11 @@ public sealed record SdkQuery
     /// <summary>Gets a specific compiler target triple, not arbitrary compiler flags.</summary>
     public string? TargetTriple { get; init; }
 
-    /// <summary>Gets an installed SDK-local library variant identifier. Null accepts all variants; a dot selects the default classified variant. This is not a path or compiler argument.</summary>
+    /// <summary>
+    /// Gets an installed SDK-local library variant identifier. Null accepts all variants;
+    /// a dot selects the default classified variant, including WASI noeh.
+    /// WASI eh selects its independent exception layout. This is not a path or compiler argument.
+    /// </summary>
     public string? Multilib { get; init; }
 
     /// <summary>Gets an Android API requirement, evaluated separately for each ABI.</summary>

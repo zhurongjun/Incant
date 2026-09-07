@@ -13,16 +13,24 @@ internal static class Resources
 
     internal static void Libraries(ResourceCollector resources, string directory, int? apiLevel = null)
     {
-        resources.Add(ResourcePurpose.LibraryDirectory, directory, apiLevel);
+        foreach ((ResourcePurpose purpose, string path) in LibraryEntries(directory))
+        {
+            resources.Add(purpose, path, apiLevel);
+        }
+    }
+
+    internal static IEnumerable<(ResourcePurpose Purpose, string Path)> LibraryEntries(string directory)
+    {
+        yield return (ResourcePurpose.LibraryDirectory, directory);
         foreach (string file in SearchPaths.Files(directory))
         {
             if (TargetResources.IsStartup(file))
             {
-                resources.Add(ResourcePurpose.Startup, file, apiLevel);
+                yield return (ResourcePurpose.Startup, file);
             }
             else if (TargetResources.IsLibrary(file))
             {
-                resources.Add(ResourcePurpose.Library, file, apiLevel);
+                yield return (ResourcePurpose.Library, file);
             }
         }
     }

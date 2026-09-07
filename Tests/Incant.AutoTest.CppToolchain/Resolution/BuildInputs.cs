@@ -68,6 +68,22 @@ internal static class BuildInputs
             }
         }
 
+        if (toolchain.AdapterKind == BuildAdapterKind.Wasi)
+        {
+            string[] libraries = toolchain.Multilib == "eh"
+                ? ["libc.a", "libc++.a", "libc++abi.a", "libunwind.a"]
+                : ["libc.a", "libc++.a", "libc++abi.a"];
+            foreach (string library in libraries)
+            {
+                // A parent search directory must not stand in for an inventoried variant library.
+                if (!toolchain.Resources.Any(resource => resource.Purpose == ResourcePurpose.Library
+                    && Path.GetFileName(resource.Path) == library && File.Exists(resource.Path)))
+                {
+                    missing.Add($"The selected WASI layout does not supply '{library}'.");
+                }
+            }
+        }
+
         if (toolchain.ExecutionMode is ExecutionMode.Node or ExecutionMode.Wasmtime
             && !File.Exists(toolchain.RuntimePath))
         {

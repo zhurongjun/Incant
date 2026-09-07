@@ -1,6 +1,7 @@
 using System.Text;
 using Incant.Core.Cpp;
 using Incant.Core.Cpp.FindTools;
+using Incant.TestSupport;
 
 namespace Incant.UnitTest.Core.Cpp.FindTools;
 
@@ -79,25 +80,28 @@ public sealed class CompilerDiscoveryTests
         Assert.Contains("exit=17", diagnostic.Message);
         Assert.Contains("last-error", diagnostic.Message);
         Assert.True(Encoding.UTF8.GetByteCount(diagnostic.Message) < 6000);
-        Assert.Single(File.ReadAllLines(broken + ".compiler.json.arguments"));
+        Assert.Single(CompilerFixture.Invocations(broken));
     }
 
     [Fact]
     public async Task TimedOutIdentityIsRetriedOnceAndRecoveryRetainsEvidence()
     {
         using var fixture = new CompilerFixture();
-        string compiler = fixture.Compiler("bin/clang-18", new Dictionary<string, object>
-        {
-            ["DelayMilliseconds"] = 30000,
-            ["DelayOnce"] = 1,
-        });
+        string compiler = fixture.Compiler("bin/clang-18");
+        await FindAsync(compiler);
+        Guid[] warmup = CompilerFixture.Invocations(compiler).Select(invocation => invocation.Id).ToArray();
+        CompilerFixture.Configure(compiler, new Dictionary<string, object> { ["BlockIdentityOnce"] = 1 });
 
-        DiscoveryResult result = await FindAsync(compiler, TimeSpan.FromSeconds(2));
+        DiscoveryResult result = await FindAsync(compiler, TimeSpan.FromSeconds(5));
         Assert.Equal(compiler, Assert.Single(result.ToolSets).CompilerPath);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("TimedOut", StringComparison.Ordinal));
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("recovered", StringComparison.Ordinal));
-        Assert.Equal(2, File.ReadAllLines(compiler + ".compiler.json.arguments")
-            .Count(line => line.Contains("--version", StringComparison.Ordinal)));
+        CompilerInvocation[] attempts = CompilerFixture.Invocations(compiler)
+            .Where(invocation => !warmup.Contains(invocation.Id) && invocation.Arguments.Contains("--version"))
+            .ToArray();
+        Assert.Equal(2, attempts.Length);
+        Assert.Null(attempts[0].CompletedTimestamp);
+        Assert.Equal(0, attempts[1].ExitCode);
     }
 
     [Fact]
@@ -133,30 +137,58 @@ public sealed class CompilerDiscoveryTests
     }
 
     [Fact]
+    public async Task IsolatedEnvironmentStartsTheApphostWithoutInheritingCompilerConfiguration()
+    {
+        using var fixture = new CompilerFixture();
+        var environment = new Dictionary<string, string?>(CompilerFixture.Environment())
+        {
+            ["INCANT_TEST_VALUE"] = "controlled value",
+        };
+        var expected = new Dictionary<string, string?>(environment)
+        {
+            ["PATH"] = null,
+            ["CC"] = null,
+            ["CXX"] = null,
+        };
+        string compiler = fixture.Compiler("bin/clang-18", new Dictionary<string, object>
+        {
+            ["ExpectedEnvironment"] = expected,
+        });
+
+        DiscoveryResult result = await new Finder([new CompilerProvider()]).FindToolSetsAsync(new ToolSetQuery
+        {
+            RootPath = compiler,
+            Environment = environment,
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(compiler, Assert.Single(result.ToolSets).CompilerPath);
+        Assert.All(CompilerFixture.Invocations(compiler), invocation => Assert.Equal(0, invocation.ExitCode));
+    }
+
+    [Fact]
+    public async Task CompletedDiscoveryReportsItsFailureInsteadOfWaitingForAnImpossibleEvent()
+    {
+        using var fixture = new CompilerFixture();
+        string compiler = fixture.Compiler("bin/clang-18");
+        fixture.Compiler("bin/clang-19", new Dictionary<string, object> { ["ExitCode"] = 19 });
+        await using var operation = Observe(Path.GetDirectoryName(compiler)!);
+
+        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            operation.WaitUntilAsync(() => false));
+        Assert.Contains("exit=19", exception.Message);
+    }
+
+    [Fact]
     public async Task CancellationDuringIdentityProbePropagates()
     {
         using var fixture = new CompilerFixture();
-        string compiler = fixture.Compiler("bin/clang-18", new Dictionary<string, object> { ["DelayMilliseconds"] = 30000 });
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        Task<DiscoveryResult> pending = FindAsync(compiler, TimeSpan.FromSeconds(30), cancellation.Token);
-        try
+        string compiler = fixture.Compiler("bin/clang-18", new Dictionary<string, object>
         {
-            await WaitUntilAsync(() => File.Exists(compiler + ".compiler.json.arguments"));
-            cancellation.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
-        }
-        finally
-        {
-            cancellation.Cancel();
-            try
-            {
-                await pending;
-            }
-            catch (OperationCanceledException)
-            {
-                // The canceled discovery has reaped its child before fixture cleanup.
-            }
-        }
+            ["ReleaseFile"] = Path.Combine(fixture.Root, "release"),
+        });
+        await using var operation = Observe(compiler);
+        await operation.WaitUntilAsync(() => CompilerFixture.Invocations(compiler).Count > 0);
+        operation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.CompleteAsync());
     }
 
     [Fact]
@@ -170,30 +202,29 @@ public sealed class CompilerDiscoveryTests
                 ["Identity"] = $"clang version {version}.0.0",
                 ["ReleaseFile"] = release,
             })).ToArray();
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        Task<DiscoveryResult> pending = FindAsync(Path.GetDirectoryName(compilers[0])!,
-            TimeSpan.FromSeconds(30), cancellation.Token);
-        try
+        await using var operation = Observe(Path.GetDirectoryName(compilers[0])!);
+        await operation.WaitUntilAsync(() => compilers.Count(path => CompilerFixture.Invocations(path).Count > 0) >= 4);
+        Assert.Equal(4, compilers.Count(path => CompilerFixture.Invocations(path).Count > 0));
+        File.WriteAllText(release, "");
+        Assert.Equal(6, (await operation.CompleteAsync()).ToolSets.Count);
+
+        CompilerInvocation[] identities = compilers.SelectMany(CompilerFixture.Invocations)
+            .Where(invocation => invocation.Arguments.Contains("--version")).ToArray();
+        Assert.Equal(6, identities.Length);
+        Assert.All(identities, invocation =>
         {
-            await WaitUntilAsync(() => compilers.Count(path => File.Exists(path + ".compiler.json.arguments")) >= 4);
-            Assert.Equal(4, compilers.Count(path => File.Exists(path + ".compiler.json.arguments")));
-            File.WriteAllText(release, "");
-            Assert.Equal(6, (await pending).ToolSets.Count);
-        }
-        finally
-        {
-            File.WriteAllText(release, "");
-            cancellation.Cancel();
-            try
-            {
-                await pending;
-            }
-            catch (OperationCanceledException)
-            {
-                // Ensure no helper remains active when the fixture is removed.
-            }
-        }
+            Assert.NotNull(invocation.CompletedTimestamp);
+            Assert.Equal(0, invocation.ExitCode);
+        });
+        int peak = identities.Max(current => identities.Count(other =>
+            other.StartedTimestamp <= current.StartedTimestamp
+            && current.StartedTimestamp < other.CompletedTimestamp));
+        Assert.Equal(4, peak);
     }
+
+    private static DiscoveryOperation<DiscoveryResult> Observe(string root) =>
+        new(token => FindAsync(root, TimeSpan.FromSeconds(30), token),
+            result => string.Join(System.Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.Message)));
 
     private static Task<DiscoveryResult> FindAsync(string root, TimeSpan? timeout = null, CancellationToken? token = null) =>
         new Finder([new CompilerProvider()]).FindToolSetsAsync(new ToolSetQuery
@@ -203,14 +234,4 @@ public sealed class CompilerDiscoveryTests
             ProbeTimeout = timeout ?? TimeSpan.FromSeconds(10),
             Environment = CompilerFixture.Environment(),
         }, token ?? TestContext.Current.CancellationToken);
-
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        deadline.CancelAfter(TimeSpan.FromSeconds(15));
-        while (!condition())
-        {
-            await Task.Delay(10, deadline.Token);
-        }
-    }
 }

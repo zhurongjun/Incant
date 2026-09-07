@@ -115,7 +115,7 @@ internal static class BundleToolchainResolver
                         TargetPlatform.Wasi,
                         TargetArchitecture.Wasm32,
                         triple,
-                        multilib: null,
+                        multilib: sdk.Layouts.Any(layout => layout.Multilib is not null) ? "." : null,
                         androidApi: null,
                         BuildAdapterKind.Wasi,
                         cancellationToken).ConfigureAwait(false);
@@ -137,16 +137,9 @@ internal static class BundleToolchainResolver
         BuildAdapterKind adapter,
         CancellationToken cancellationToken)
     {
-        string? discriminator = multilib
-            ?? androidApi?.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            ?? (platform == TargetPlatform.Wasi
-                ? targetTriple ?? string.Empty
-                : null);
-        string id = CreateId(
-            owner.Requirement.Id,
-            platform,
-            architecture,
-            discriminator);
+        string discriminator = CreateId("layout", targetTriple,
+            multilib is null or "." ? "default" : multilib, androidApi);
+        string id = CreateId(owner.Requirement.Id, platform, architecture, discriminator);
         var candidate = new ToolchainCandidate(id, [owner.Requirement.Id],
             owner.Managed && (platform != TargetPlatform.Android
                 || context.Profile.AndroidArchitectures.Contains(architecture)));
@@ -167,7 +160,7 @@ internal static class BundleToolchainResolver
         sdkQuery = owner.Requirement.SdkVersion?.Apply(sdkQuery) ?? sdkQuery;
         DiscoveryProbe targetProbe = await DiscoveryStage.RunSdkProbeAsync(
             context,
-            $"{owner.Requirement.Id}/resolve/{platform}/{architecture}/{discriminator ?? targetTriple ?? "default"}",
+            $"{owner.Requirement.Id}/resolve/{platform}/{architecture}/{discriminator}",
             "explicit root with target, API, and multilib constraints",
             SdkFinder.CreateDefault(),
             sdkQuery,

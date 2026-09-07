@@ -9,4 +9,8 @@
   <ItemGroup>
     <ProjectReference Include="../../Source/Incant.Base/Incant.Base.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/CompilerInvocation.cs" Link="TestSupport/CompilerInvocation.cs" />
+    <Compile Include="../Shared/CompilerInvocationStore.cs" Link="TestSupport/CompilerInvocationStore.cs" />
+  </ItemGroup>
 </Project>

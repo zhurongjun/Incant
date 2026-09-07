@@ -220,11 +220,10 @@ internal static class ToolchainResolution
     {
         IEnumerable<TargetLayout> layouts = sdk.Layouts.Where(layout =>
             layout.Platform == platform && layout.Architecture == architecture);
-        if (multilib is not null)
-        {
-            layouts = layouts.Where(layout => layout.Multilib == multilib);
-        }
-
+        layouts = multilib is null
+            ? layouts.Where(layout => layout.Multilib is null or ".")
+                .OrderByDescending(layout => layout.Multilib == ".")
+            : layouts.Where(layout => layout.Multilib == multilib);
         return layouts.FirstOrDefault();
     }
 

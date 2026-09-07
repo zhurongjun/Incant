@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Incant.TestSupport;
 
 namespace Incant.ProcessTestHelper;
 
@@ -7,7 +8,15 @@ internal static class CompilerCommands
     internal static async Task<int> RunAsync(string[] arguments, string configurationPath)
     {
         using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(configurationPath).ConfigureAwait(false));
-        JsonElement configuration = document.RootElement;
+        string directory = configurationPath + ".invocations";
+        CompilerInvocation invocation = await CompilerInvocationStore.StartAsync(directory, arguments).ConfigureAwait(false);
+        int exitCode = await ExecuteAsync(arguments, configurationPath, document.RootElement).ConfigureAwait(false);
+        await CompilerInvocationStore.CompleteAsync(directory, invocation, exitCode).ConfigureAwait(false);
+        return exitCode;
+    }
+
+    private static async Task<int> ExecuteAsync(string[] arguments, string configurationPath, JsonElement configuration)
+    {
         string Value(string name, string fallback = "") =>
             configuration.TryGetProperty(name, out JsonElement value) ? value.GetString() ?? fallback : fallback;
         int Number(string name) =>
@@ -15,31 +24,23 @@ internal static class CompilerCommands
         string[] Paths(string name) => configuration.TryGetProperty(name, out JsonElement value)
             ? value.EnumerateArray().Select(item => item.GetString()!).ToArray() : [];
 
-        string log = configurationPath + ".arguments";
-        await File.AppendAllTextAsync(log, JsonSerializer.Serialize(arguments) + "\n").ConfigureAwait(false);
+        if (configuration.TryGetProperty("ExpectedEnvironment", out JsonElement expectedEnvironment))
+        {
+            foreach (JsonProperty variable in expectedEnvironment.EnumerateObject())
+            {
+                if (Environment.GetEnvironmentVariable(variable.Name) != variable.Value.GetString())
+                {
+                    Console.Error.Write($"Unexpected environment variable '{variable.Name}'.");
+                    return 98;
+                }
+            }
+        }
+
         if (arguments.Contains("--version"))
         {
-            int delay = Number("DelayMilliseconds");
-            if (delay > 0)
+            if (Number("BlockIdentityOnce") != 0 && ClaimFirstIdentity(configurationPath))
             {
-                bool shouldDelay = true;
-                if (Number("DelayOnce") != 0)
-                {
-                    string marker = configurationPath + ".delayed";
-                    try
-                    {
-                        using FileStream stream = File.Open(marker, FileMode.CreateNew);
-                    }
-                    catch (IOException) when (File.Exists(marker))
-                    {
-                        shouldDelay = false;
-                    }
-                }
-
-                if (shouldDelay)
-                {
-                    await Task.Delay(delay).ConfigureAwait(false);
-                }
+                await Task.Delay(Timeout.InfiniteTimeSpan).ConfigureAwait(false);
             }
 
             string release = Value("ReleaseFile");
@@ -121,5 +122,19 @@ internal static class CompilerCommands
         }
 
         return 0;
+    }
+
+    private static bool ClaimFirstIdentity(string configurationPath)
+    {
+        string marker = configurationPath + ".blocked";
+        try
+        {
+            using FileStream stream = File.Open(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            return true;
+        }
+        catch (IOException) when (File.Exists(marker))
+        {
+            return false;
+        }
     }
 }

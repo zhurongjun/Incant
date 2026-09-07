@@ -20,4 +20,8 @@
     <ProjectReference Include="../../Source/Incant.Core/Incant.Core.csproj" />
     <ProjectReference Include="../Incant.ProcessTestHelper/Incant.ProcessTestHelper.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/CompilerInvocation.cs" Link="TestSupport/CompilerInvocation.cs" />
+    <Compile Include="../Shared/CompilerInvocationStore.cs" Link="TestSupport/CompilerInvocationStore.cs" />
+  </ItemGroup>
 </Project>

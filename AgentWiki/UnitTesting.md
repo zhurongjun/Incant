@@ -51,8 +51,6 @@ dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configurati
 
 ## 工具链 AutoTest
 
-旧验收条件逐项归类及扩展方式见 [ToolchainAutoTestChecks.md](ToolchainAutoTestChecks.md)。
-
 - Core 单元测试通过公开 Finder/Provider API 构造受控候选或合成安装目录与启动器，验证 Cpp.FindTools / Cpp.FindSdk 的调度、筛选、选择、目标别名和不可变快照；不得读取本机安装、Registry 或网络。
 - 依赖真实安装的验证统一由 `Incant.AutoTest.CppToolchain` 承担。它不提供自由组合的发现参数，而是公开 `windows-vs2022`、`windows-vs2026`、`ubuntu-24.04` 和 `macos-15-arm64` 四个完整环境 Profile。
 - 每个 Profile 分开声明预装家族覆盖、主动部署安装及目标场景，并依次运行 `Preflight`、`Discover`、`Resolve`、`Build` 和 `Execute`。候选之间互不回退；某个候选失败只跳过依赖它的动作。
@@ -62,6 +60,15 @@ dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configurati
 - AutoTest 只读取环境清单和安装，不下载依赖或修改全局环境。额外 SDK 由 `Tests/Incant.AutoTest.CppToolchain.Setup` 安装到 `build/toolchains`，各候选的环境变量仅传给对应进程。
 - schema 2 报告总是在 `finally` 中写出，集中保存安装与 SDK 快照，场景通过 ID 引用，并包含覆盖结果、失败/跳过原因、诊断、动作、退出码、耗时、日志和产物。宿主/清单配置错误返回 2，测试失败返回 1，成功返回 0，取消返回 130。
 - 本机只能声明实际执行过的 Profile；四个 GitHub runner 的 matrix 结果才构成跨平台功能验收。
+
+### 受控工具链夹具
+
+- 安装夹具通过共用 `TestDirectory` 在物理临时根下创建。测试内部的符号链接仍属于显式输入；资源期望值从已知安装目标构造，不能调用生产路径规范化实现作为判断依据。调用入口与物理资源身份分别断言。
+- .NET 编译器辅助程序使用当前测试 runtime 所属安装的 `DOTNET_ROOT` 及架构变量启动。不要依赖全局 .NET 安装或将整个宿主环境复制进 Finder 查询；用例需要的变量必须显式提供。
+- 每次辅助程序调用独立发布启动、完成记录。日志通过临时文件原子发布，用调用 ID 区分前后两次查询；不得跨进程追加同一 JSON 文件或在发现过程中清空日志。调用原始记录作为 xUnit 附件保存。
+- 并发、取消和超时测试使用受控启动与释放事件；事件等待同时观察发现任务，提前失败应立即呈现诊断。超时用于防止挂起，不能代替行为同步。清理前须取消并等待发现结束，清理异常作为测试警告保留，不覆盖原始失败。
+- WASI 黑盒夹具应覆盖官方发行包的目标与异常变体目录，以及旧布局、部分安装和目标别名。默认 `noeh` 布局标识为 `.`，异常布局为 `eh`，未分类旧布局为 `null`；头文件与 C++ 库不能跨变体补齐。LTO、其他 WASI 目标和 threads 目录不能混入默认布局。
+- WASI AutoTest 明确选择默认布局并执行原有静态库及可执行程序链。EH 布局本轮验证发现和筛选契约，不作为异常执行能力已经通过的证明。
 
 ```shell
 # Core 局部单元测试

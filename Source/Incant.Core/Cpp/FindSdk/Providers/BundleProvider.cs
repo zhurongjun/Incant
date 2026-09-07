@@ -58,7 +58,7 @@ public sealed class BundleProvider : IDiscoveryProvider
             {
                 string targetTriple = installation.TargetTriple
                     ?? WasiTargetResolver.Preview1Triple;
-                layouts.Add(WasiResourceLayout.Create(installation.Sysroot, targetTriple));
+                layouts.AddRange(WasiResourceLayout.Create(installation.Sysroot, targetTriple, cancellationToken));
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
