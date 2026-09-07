@@ -42,7 +42,7 @@ internal static partial class ProgramLocator
                 string resolved = SetupPathGuard.ResolveLink(candidate);
                 if (seen.Add(resolved))
                 {
-                    matches.Add(resolved);
+                    matches.Add(Path.GetFullPath(candidate));
                 }
             }
         }

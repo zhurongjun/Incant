@@ -1,0 +1,92 @@
+namespace Incant.Core.Cpp;
+
+internal sealed class CompilerInvocationCandidate
+{
+    internal CompilerInvocationCandidate(
+        string invocationPath,
+        string environmentPath,
+        Source source,
+        bool isPrivateDirectory,
+        IEnumerable<CompilerSearchDirectory>? associatedSearchDirectories = null)
+        : this(
+            invocationPath,
+            environmentPath,
+            [source],
+            isPrivateDirectory,
+            associatedSearchDirectories)
+    {
+    }
+
+    private CompilerInvocationCandidate(
+        string invocationPath,
+        string environmentPath,
+        IEnumerable<Source> sources,
+        bool isPrivateDirectory,
+        IEnumerable<CompilerSearchDirectory>? associatedSearchDirectories)
+    {
+        InvocationPath = Path.GetFullPath(invocationPath);
+        CanonicalPath = Canonicalize(invocationPath);
+        EnvironmentPath = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(environmentPath));
+        Sources = SearchPaths.Freeze(sources.Distinct().Order());
+        IsPrivateDirectory = isPrivateDirectory;
+        AssociatedSearchDirectories = SearchPaths.Freeze(
+            MergeDirectories(associatedSearchDirectories ?? []));
+    }
+
+    internal string InvocationPath { get; }
+
+    internal string CanonicalPath { get; }
+
+    internal string EnvironmentPath { get; }
+
+    internal IReadOnlyList<Source> Sources { get; }
+
+    internal bool IsPrivateDirectory { get; }
+
+    internal IReadOnlyList<CompilerSearchDirectory> AssociatedSearchDirectories { get; }
+
+    internal static IReadOnlyList<CompilerInvocationCandidate> Merge(
+        IEnumerable<CompilerInvocationCandidate> candidates) => candidates
+        .GroupBy(candidate => candidate.InvocationPath, SearchPaths.Comparer)
+        .Select(group =>
+        {
+            CompilerInvocationCandidate[] ordered = group
+                .OrderBy(candidate => candidate.Sources.Min())
+                .ToArray();
+            CompilerInvocationCandidate preferred = ordered[0];
+            return new CompilerInvocationCandidate(
+                preferred.InvocationPath,
+                preferred.EnvironmentPath,
+                ordered.SelectMany(candidate => candidate.Sources),
+                ordered.All(candidate => candidate.IsPrivateDirectory),
+                ordered.SelectMany(
+                    candidate => candidate.AssociatedSearchDirectories));
+        })
+        .ToArray();
+
+    private static string Canonicalize(string path)
+    {
+        try
+        {
+            return SearchPaths.Normalize(path);
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or NotSupportedException)
+        {
+            return Path.GetFullPath(path);
+        }
+    }
+
+    private static IEnumerable<CompilerSearchDirectory> MergeDirectories(
+        IEnumerable<CompilerSearchDirectory> directories) => directories
+        .Select(directory => new CompilerSearchDirectory(
+            Path.TrimEndingDirectorySeparator(
+                Path.GetFullPath(directory.Path)),
+            directory.IsPrivate))
+        .GroupBy(directory => directory.Path, SearchPaths.Comparer)
+        .Select(group => new CompilerSearchDirectory(
+            group.First().Path,
+            group.All(directory => directory.IsPrivate)));
+}

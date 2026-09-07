@@ -79,7 +79,7 @@ public sealed class Sdk
     /// <summary>Gets the enclosing product version, independently of the SDK version.</summary>
     public Version? ProductVersion { get; }
 
-    /// <summary>Gets the compiler associated with a development-file inventory, if any.</summary>
+    /// <summary>Gets the preserved compiler invocation entry associated with a development-file inventory, if any.</summary>
     public string? CompilerPath { get; }
 
     /// <summary>Gets the release channel.</summary>

@@ -115,22 +115,27 @@ internal static class XcodeToolchainResolver
 
         ToolQuery query = Query(context, platform, architecture);
         Tool? cCompiler = await FindToolAsync(
+            context,
             candidate,
             toolSet,
             ToolNames.Clang, query, cancellationToken).ConfigureAwait(false);
         Tool? cppCompiler = await FindToolAsync(
+            context,
             candidate,
             toolSet,
             ToolNames.Clangxx, query, cancellationToken).ConfigureAwait(false);
         Tool? archiver = await FindToolAsync(
+            context,
             candidate,
             toolSet,
             ToolNames.Ar, query, cancellationToken).ConfigureAwait(false);
         Tool? ranlib = await FindToolAsync(
+            context,
             candidate,
             toolSet,
             ToolNames.Ranlib, query, cancellationToken).ConfigureAwait(false);
         Tool? linker = await FindToolAsync(
+            context,
             candidate,
             toolSet,
             ToolNames.Ld, query, cancellationToken).ConfigureAwait(false);

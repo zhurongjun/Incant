@@ -54,7 +54,7 @@ internal static class TargetResources
 
     internal static bool IsCompatibleFile(string path, CompilerTarget target, bool hasForeignLibc, bool isOwned = false)
     {
-        bool? matchesBinary = ExecutableArchitecture.MatchesTarget(path, target.Identity);
+        bool? matchesBinary = BinaryImageReader.MatchesTarget(path, target.Identity);
         if (matchesBinary is false
             || HasConflictingDirectory(path, target.Identity) && !(isOwned && matchesBinary is true))
         {
@@ -90,7 +90,7 @@ internal static class TargetResources
         foreach (string path in SearchPaths.Files(Path.Combine(root, "lib")))
         {
             if (Path.GetFileName(path).StartsWith("ld-musl-", StringComparison.Ordinal)
-                && ExecutableArchitecture.Read(path).Contains(target.Architecture))
+                && BinaryImageReader.Read(path).Contains(target.Architecture))
             {
                 return LibcFamily(target) == "musl";
             }
@@ -121,7 +121,7 @@ internal static class TargetResources
     internal static bool RuntimeMatches(string directory, string file, TargetIdentity target)
     {
         string directoryName = Path.GetFileName(directory).ToLowerInvariant();
-        if (HasConflictingDirectory(directory, target) || ExecutableArchitecture.MatchesTarget(file, target) is false)
+        if (HasConflictingDirectory(directory, target) || BinaryImageReader.MatchesTarget(file, target) is false)
         {
             return false;
         }
@@ -162,7 +162,7 @@ internal static class TargetResources
             };
             return suffix.Length > 0 && (name.Contains("." + suffix + ".", StringComparison.Ordinal)
                 || name.Contains("_" + suffix + ".", StringComparison.Ordinal))
-                && ExecutableArchitecture.MatchesTarget(file, target) is true;
+                && BinaryImageReader.MatchesTarget(file, target) is true;
         }
 
         string[] names = target.Architecture switch

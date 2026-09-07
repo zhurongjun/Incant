@@ -581,15 +581,13 @@ internal static class ValidationStage
     {
         ValidateAbsoluteExistingPath(
             candidate, tool.Path, role, expectDirectory: false);
-        bool compatible = tool.HostArchitecture == context.Profile.HostArchitecture
-            || context.Profile.HostOS == Incant.Base.PlatformOS.OSX
-                && context.Profile.HostArchitecture == TargetArchitecture.ARM64
-                && tool.HostArchitecture == TargetArchitecture.X64
-            || IsToolchainWrapper();
+        bool compatible = context.HostCapabilities.CanExecute(
+            tool.HostArchitecture);
         if (!compatible)
         {
             candidate.Invalidate(
-                $"{role} host architecture {tool.HostArchitecture} cannot run on {context.Profile.HostArchitecture}.");
+                $"{role} host architecture {tool.HostArchitecture} cannot run on "
+                + $"the measured host architectures {string.Join(", ", context.HostCapabilities.Architectures)}.");
         }
 
         TargetArchitecture targetArchitecture = candidate.Toolchain!.TargetArchitecture;
@@ -599,9 +597,6 @@ internal static class ValidationStage
             candidate.Invalidate(
                 $"{role} target architecture {tool.TargetArchitecture} differs from {targetArchitecture}.");
         }
-
-        bool IsToolchainWrapper() => candidate.Toolchain!.AdapterKind == BuildAdapterKind.Emscripten
-            && tool.HostArchitecture == TargetArchitecture.Unknown;
     }
 
     private static void ValidateEmscriptenVariants(AutoTestContext context)

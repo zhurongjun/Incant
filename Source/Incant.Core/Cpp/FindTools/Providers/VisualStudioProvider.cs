@@ -50,32 +50,52 @@ public sealed class VisualStudioProvider : IDiscoveryProvider
             _context = context;
         }
 
-        protected override Task<Tool?> FindToolCoreAsync(string name, ToolQuery query, CancellationToken cancellationToken) =>
-            Task.Run(() =>
+        protected override async Task<Tool?> FindToolCoreAsync(
+            string name,
+            ToolQuery query,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            TargetArchitecture target =
+                query.TargetArchitecture ?? _context.HostArchitecture;
+            string? targetName = WindowsLocator.Architectures
+                .FirstOrDefault(item => item.Architecture == target).Name;
+            if (targetName is null)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                TargetArchitecture target = query.TargetArchitecture ?? _context.HostArchitecture;
-                foreach ((string hostName, _) in WindowsLocator.RunnableHosts(_context))
-                {
-                    string? targetName = WindowsLocator.Architectures.FirstOrDefault(item => item.Architecture == target).Name;
-                    if (targetName is null)
-                    {
-                        return null;
-                    }
+                return null;
+            }
 
-                    string? path = SearchPaths.Executable(Path.Combine(RootPath, "bin", "Host" + hostName, targetName), name);
-                    if (path is not null)
-                    {
-                        TargetArchitecture host = ExecutableArchitecture.Select(ExecutableArchitecture.Read(path), query.HostArchitecture);
-                        if (query.HostArchitecture is null || host != TargetArchitecture.Unknown)
-                        {
-                            return new Tool(name, path, host, target);
-                        }
-                    }
+            foreach ((string hostName, _)
+                in WindowsLocator.RunnableHosts(_context))
+            {
+                string? path = SearchPaths.Executable(
+                    Path.Combine(
+                        RootPath,
+                        "bin",
+                        "Host" + hostName,
+                        targetName),
+                    name);
+                if (path is null)
+                {
+                    continue;
                 }
 
-                return null;
-            }, cancellationToken);
+                TargetArchitecture host =
+                    await HostExecutableInspector.SelectAsync(
+                        path,
+                        query.HostArchitecture,
+                        _context,
+                        allowsLaunchers: false,
+                        cancellationToken).ConfigureAwait(false);
+                if (query.HostArchitecture is null
+                    || host != TargetArchitecture.Unknown)
+                {
+                    return new Tool(name, path, host, target);
+                }
+            }
+
+            return null;
+        }
 
         private static string? PrimaryCompiler(string root, DiscoveryContext context) =>
             WindowsLocator.RunnableHosts(context).SelectMany(host => WindowsLocator.Architectures

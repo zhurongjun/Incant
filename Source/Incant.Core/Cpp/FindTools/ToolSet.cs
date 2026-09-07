@@ -61,7 +61,7 @@ public abstract class ToolSet
     /// <summary>Gets the compiler's own version, when established.</summary>
     public Version? CompilerVersion { get; }
 
-    /// <summary>Gets the identity compiler path when compiler probing established this environment.</summary>
+    /// <summary>Gets the compiler invocation path when probing established this environment; wrappers and stable package-manager entries are preserved.</summary>
     public string? CompilerPath { get; }
 
     /// <summary>Gets the compiler-reported default target, without claiming support for every target.</summary>
@@ -79,8 +79,8 @@ public abstract class ToolSet
     /// <summary>Gets the current host OS. Finding a tool does not change the host environment.</summary>
     public PlatformOS HostOS => Platform.OS;
 
-    /// <summary>Finds a concrete executable name. Missing tools return null; no SDK or other installation is searched.</summary>
-    /// <param name="name">A single concrete executable name without directory separators.</param>
+    /// <summary>Finds a tool role in this installation, honoring its target, version and package naming. Missing tools return null; no SDK or other installation is searched.</summary>
+    /// <param name="name">A single tool role name without directory separators.</param>
     /// <param name="query">Optional host and target constraints.</param>
     /// <param name="cancellationToken">Cancels the fresh tool lookup.</param>
     /// <returns>The tool in this installation, or null when it is missing or does not match.</returns>
@@ -168,52 +168,58 @@ internal sealed class DirectoryToolSet : ToolSet
 
     private readonly bool _allowsWrappers;
 
+    private readonly DiscoveryContext _context;
+
     internal DirectoryToolSet(Kind kind, string root, string environment, string bin,
         Version? version, Version? productVersion, Version? compilerVersion, string? compiler,
-        string? triple, Channel channel, IEnumerable<Source> sources,
+        string? triple, Channel channel, IEnumerable<Source> sources, DiscoveryContext context,
         bool allowsWrappers = false, IEnumerable<Diagnostic>? diagnostics = null)
         : base(kind, root, environment, version, productVersion, compilerVersion, compiler, triple, channel, sources, diagnostics)
     {
         _bin = bin;
         _allowsWrappers = allowsWrappers;
+        _context = context;
     }
 
-    protected override Task<Tool?> FindToolCoreAsync(string name, ToolQuery query, CancellationToken cancellationToken) =>
-        Task.Run(() =>
+    protected override async Task<Tool?> FindToolCoreAsync(
+        string name,
+        ToolQuery query,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        string? path = SearchPaths.Executable(
+            _bin,
+            name,
+            _allowsWrappers);
+        if (path is null && Kind == Kind.Emscripten
+            && (name.StartsWith("clang", StringComparison.Ordinal)
+                || name.StartsWith("llvm-", StringComparison.Ordinal)
+                || name == "wasm-ld"))
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            path = SearchPaths.Executable(
+                Path.GetFullPath(Path.Combine(RootPath, "..", "bin")),
+                name,
+                wrappers: true);
+        }
 
-            // Versioned GNU/LLVM installations may share a bin directory; never borrow an unversioned compiler.
-            bool isFamilyTool = Kind == Kind.Gnu && name is "gcc" or "g++" or "gcc-ar" or "gcc-ranlib" or "ar" or "ld" or "ranlib"
-                || Kind == Kind.Llvm && name is "clang" or "clang++" or "clang-cl" or "llvm-ar" or "llvm-lib" or "llvm-ranlib" or "ld.lld" or "lld-link" or "wasm-ld";
-            string concreteName = isFamilyTool ? CompilerLocator.RelatedName(CompilerPath!, name, Kind == Kind.Gnu) : name;
-            string? path = SearchPaths.Executable(_bin, concreteName, _allowsWrappers);
-            if (path is null && Kind == Kind.Emscripten
-                && (name.StartsWith("clang", StringComparison.Ordinal) || name.StartsWith("llvm-", StringComparison.Ordinal) || name == "wasm-ld"))
-            {
-                path = SearchPaths.Executable(Path.GetFullPath(Path.Combine(RootPath, "..", "bin")), name);
-            }
+        if (path is null)
+        {
+            return null;
+        }
 
-            if (path is null && concreteName != name && name is "ar" or "ld" or "ranlib")
-            {
-                string? reportedTriple = DefaultTargetTriple;
-                path = reportedTriple is null ? null : SearchPaths.Executable(_bin, reportedTriple + "-" + name);
-                // Unversioned binutils are shared by GCC versions; compiler drivers are not.
-                path ??= SearchPaths.Executable(_bin, name);
-            }
+        TargetArchitecture host =
+            await HostExecutableInspector.SelectAsync(
+                path,
+                query.HostArchitecture,
+                _context,
+                _allowsWrappers,
+                cancellationToken).ConfigureAwait(false);
+        if (query.HostArchitecture is not null
+            && host == TargetArchitecture.Unknown)
+        {
+            return null;
+        }
 
-            if (path is null)
-            {
-                return null;
-            }
-
-            IReadOnlyList<TargetArchitecture> architectures = ExecutableArchitecture.Read(path);
-            TargetArchitecture host = ExecutableArchitecture.Select(architectures, query.HostArchitecture);
-            if (query.HostArchitecture is not null && host == TargetArchitecture.Unknown)
-            {
-                return null;
-            }
-
-            return new Tool(name, path, host);
-        }, cancellationToken);
+        return new Tool(name, path, host);
+    }
 }

@@ -4,114 +4,549 @@ namespace Incant.Core.Cpp;
 
 internal static partial class CompilerLocator
 {
-    internal static async Task<IReadOnlyList<Candidate>> FindAsync(
-        bool isGnu, string? explicitRoot, DiscoveryContext context, CancellationToken cancellationToken)
+    internal static async Task<IReadOnlyList<CompilerInvocationCandidate>> FindAsync(
+        string? explicitRoot,
+        DiscoveryContext context,
+        CancellationToken cancellationToken)
     {
-        if (isGnu && OperatingSystem.IsWindows())
+        IReadOnlyList<CompilerInvocationCandidate> found =
+            await Task.Run(
+                () => Find(
+                    explicitRoot,
+                    context,
+                    cancellationToken),
+                cancellationToken).ConfigureAwait(false);
+        if (explicitRoot is not null || !OperatingSystem.IsWindows())
+        {
+            return found;
+        }
+
+        var candidates =
+            new List<CompilerInvocationCandidate>(found);
+        if (context.GetEnvironmentVariable("ProgramFiles")
+            is string programFiles)
+        {
+            AddRoot(
+                candidates,
+                Path.Combine(programFiles, "LLVM"),
+                Source.StandardPath,
+                isPrivate: true,
+                cancellationToken);
+        }
+
+        foreach (Candidate visualStudio
+            in await WindowsLocator.VisualStudiosAsync(
+                null,
+                context,
+                cancellationToken).ConfigureAwait(false))
+        {
+            foreach (string suffix in new[]
+            {
+                "bin",
+                Path.Combine("x64", "bin"),
+                Path.Combine("ARM64", "bin"),
+            })
+            {
+                AddRoot(
+                    candidates,
+                    Path.Combine(
+                        visualStudio.Path,
+                        "VC",
+                        "Tools",
+                        "Llvm",
+                        suffix),
+                    visualStudio.Sources.Min(),
+                    isPrivate: true,
+                    cancellationToken);
+            }
+        }
+
+        return CompilerInvocationCandidate.Merge(candidates);
+    }
+
+    internal static string ExecutableStem(string path)
+    {
+        string fileName = Path.GetFileName(path);
+        string extension = Path.GetExtension(fileName);
+        return OperatingSystem.IsWindows()
+            || extension.Equals(".bat", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".py", StringComparison.OrdinalIgnoreCase)
+                ? Path.GetFileNameWithoutExtension(fileName)
+                : fileName;
+    }
+
+    internal static bool IsSharedDirectory(string path)
+    {
+        string normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        string unixPath = normalized.Replace('\\', '/');
+        return unixPath is "/bin" or "/usr/bin" or "/usr/local/bin"
+            || unixPath.EndsWith("/usr/bin", StringComparison.Ordinal)
+            || IsHomebrewCommonBin(unixPath);
+    }
+
+    private static IReadOnlyList<CompilerInvocationCandidate> Find(
+        string? explicitRoot,
+        DiscoveryContext context,
+        CancellationToken cancellationToken)
+    {
+        var candidates = new List<CompilerInvocationCandidate>();
+        IReadOnlyList<CompilerSearchDirectory> nixBinTools =
+            EnvironmentSearchDirectories(context, "NIX_BINTOOLS");
+        if (explicitRoot is not null)
+        {
+            AddRoot(
+                candidates,
+                explicitRoot,
+                Source.Explicit,
+                isPrivate: null,
+                cancellationToken,
+                NixAssociations(explicitRoot, context, nixBinTools));
+            return CompilerInvocationCandidate.Merge(candidates);
+        }
+
+        AddEnvironmentCommand(
+            candidates,
+            context,
+            "CC",
+            nixBinTools,
+            cancellationToken);
+        AddEnvironmentCommand(
+            candidates,
+            context,
+            "CXX",
+            nixBinTools,
+            cancellationToken);
+        AddEnvironmentRoot(
+            candidates,
+            context,
+            "LLVM_PATH",
+            cancellationToken);
+        AddEnvironmentPrefix(
+            candidates,
+            context,
+            "CONDA_PREFIX",
+            cancellationToken);
+        AddEnvironmentPrefix(
+            candidates,
+            context,
+            "NIX_CC",
+            cancellationToken,
+            nixBinTools);
+
+        if (!OperatingSystem.IsWindows())
+        {
+            AddUnixRoots(
+                candidates,
+                context,
+                cancellationToken);
+        }
+
+        foreach (string directory in SearchPaths.PathDirectories(context))
+        {
+            AddRoot(
+                candidates,
+                directory,
+                Source.Path,
+                isPrivate: false,
+                cancellationToken,
+                NixAssociations(directory, context, nixBinTools));
+        }
+
+        return CompilerInvocationCandidate.Merge(candidates);
+    }
+
+    private static void AddUnixRoots(
+        ICollection<CompilerInvocationCandidate> candidates,
+        DiscoveryContext context,
+        CancellationToken cancellationToken)
+    {
+        var homebrewPrefixes =
+            new Dictionary<string, Source>(SearchPaths.Comparer);
+        AddHomebrewPrefix(
+            homebrewPrefixes,
+            context.GetEnvironmentVariable("HOMEBREW_PREFIX"),
+            Source.Environment);
+        AddHomebrewPrefix(
+            homebrewPrefixes,
+            "/home/linuxbrew/.linuxbrew",
+            Source.StandardPath);
+        AddHomebrewPrefix(
+            homebrewPrefixes,
+            "/opt/homebrew",
+            Source.StandardPath);
+        AddHomebrewPrefix(
+            homebrewPrefixes,
+            "/usr/local",
+            Source.StandardPath);
+        foreach ((string prefix, Source source) in homebrewPrefixes
+            .OrderBy(entry => entry.Value)
+            .ThenBy(entry => entry.Key, SearchPaths.Comparer))
+        {
+            AddHomebrewRoots(
+                candidates,
+                prefix,
+                source,
+                cancellationToken);
+        }
+
+        foreach (string directory in new[] { "/usr/bin", "/usr/local/bin" })
+        {
+            AddRoot(
+                candidates,
+                directory,
+                Source.StandardPath,
+                isPrivate: false,
+                cancellationToken);
+        }
+
+        AddLlvmSlotRoots(candidates, "/usr/lib", cancellationToken);
+        AddLlvmSlotRoots(candidates, "/usr/lib64", cancellationToken);
+    }
+
+    private static void AddEnvironmentCommand(
+        ICollection<CompilerInvocationCandidate> candidates,
+        DiscoveryContext context,
+        string name,
+        IReadOnlyList<CompilerSearchDirectory> nixBinTools,
+        CancellationToken cancellationToken)
+    {
+        string? value = context.GetEnvironmentVariable(name)?.Trim().Trim('"');
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        string? path = Path.IsPathFullyQualified(value)
+            ? value
+            : SearchPaths.PathDirectories(context)
+                .Select(directory => SearchPaths.Executable(
+                    directory,
+                    value,
+                    wrappers: true))
+                .FirstOrDefault(candidate => candidate is not null);
+        if (path is not null)
+        {
+            AddRoot(
+                candidates,
+                path,
+                Source.Environment,
+                isPrivate: null,
+                cancellationToken,
+                NixAssociations(path, context, nixBinTools));
+        }
+    }
+
+    private static void AddEnvironmentRoot(
+        ICollection<CompilerInvocationCandidate> candidates,
+        DiscoveryContext context,
+        string name,
+        CancellationToken cancellationToken)
+    {
+        string? value = context.GetEnvironmentVariable(name)?.Trim().Trim('"');
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            AddRoot(
+                candidates,
+                value,
+                Source.Environment,
+                isPrivate: true,
+                cancellationToken);
+        }
+    }
+
+    private static void AddEnvironmentPrefix(
+        ICollection<CompilerInvocationCandidate> candidates,
+        DiscoveryContext context,
+        string name,
+        CancellationToken cancellationToken,
+        IReadOnlyList<CompilerSearchDirectory>? associatedDirectories = null)
+    {
+        string? value = context.GetEnvironmentVariable(name)?.Trim().Trim('"');
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        string root = string.Equals(
+            Path.GetFileName(value),
+            "bin",
+            StringComparison.OrdinalIgnoreCase)
+            ? value
+            : Path.Combine(value, "bin");
+        AddRoot(
+            candidates,
+            root,
+            Source.Environment,
+            isPrivate: true,
+            cancellationToken,
+            associatedDirectories);
+    }
+
+    private static IReadOnlyList<CompilerSearchDirectory>
+        EnvironmentSearchDirectories(
+            DiscoveryContext context,
+            string name)
+    {
+        string? value = context.GetEnvironmentVariable(name)?.Trim().Trim('"');
+        if (string.IsNullOrWhiteSpace(value))
         {
             return [];
         }
 
-        var roots = new List<Candidate>();
-        if (explicitRoot is not null)
+        try
         {
-            roots.Add(new Candidate(explicitRoot, Source.Explicit));
+            string directory = string.Equals(
+                Path.GetFileName(value),
+                "bin",
+                StringComparison.OrdinalIgnoreCase)
+                ? value
+                : Path.Combine(value, "bin");
+            return Directory.Exists(directory)
+                ? [new CompilerSearchDirectory(
+                    Path.GetFullPath(directory),
+                    IsPrivate: true)]
+                : [];
         }
-        else
+        catch (Exception exception) when (exception is ArgumentException
+            or NotSupportedException
+            or PathTooLongException)
         {
-            foreach (string name in isGnu ? new[] { "CC", "CXX" } : new[] { "LLVM_PATH", "CC", "CXX" })
-            {
-                string? path = context.GetEnvironmentVariable(name);
-                if (string.IsNullOrWhiteSpace(path))
-                {
-                    continue;
-                }
-
-                if (!Path.IsPathFullyQualified(path))
-                {
-                    path = SearchPaths.OnPath(context, path);
-                }
-
-                if (path is not null)
-                {
-                    roots.Add(new Candidate(path, Source.Environment));
-                }
-            }
-
-            foreach (string directory in new[] { "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin",
-                "/opt/homebrew/opt/llvm/bin", "/usr/local/opt/llvm/bin" })
-            {
-                if (Directory.Exists(directory))
-                {
-                    roots.Add(new Candidate(directory, Source.StandardPath));
-                }
-            }
-
-            if (!isGnu && OperatingSystem.IsWindows())
-            {
-                if (context.GetEnvironmentVariable("ProgramFiles") is string programFiles)
-                {
-                    roots.Add(new Candidate(Path.Combine(programFiles, "LLVM"), Source.StandardPath));
-                }
-
-                foreach (Candidate visualStudio in await WindowsLocator.VisualStudiosAsync(null, context, cancellationToken).ConfigureAwait(false))
-                {
-                    foreach (string suffix in new[] { "bin", "x64/bin", "ARM64/bin" })
-                    {
-                        roots.Add(new Candidate(Path.Combine(visualStudio.Path, "VC", "Tools", "Llvm", suffix), visualStudio.Sources.Min()));
-                    }
-                }
-            }
-
-            roots.AddRange(SearchPaths.PathDirectories(context).Select(path => new Candidate(path, Source.Path)));
+            return [];
         }
-
-        var compilers = new List<Candidate>();
-        foreach (Candidate root in roots)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            IEnumerable<string> paths = File.Exists(root.Path) ? [root.Path]
-                : new[] { root.Path, Path.Combine(root.Path, "bin") }.SelectMany(SearchPaths.Files);
-            foreach (string path in paths)
-            {
-                string name = Path.GetFileName(path);
-                if (!(isGnu ? GnuName() : ClangName()).IsMatch(name))
-                {
-                    continue;
-                }
-
-                string primary = path.Replace("g++", "gcc", StringComparison.Ordinal)
-                    .Replace("clang++", "clang", StringComparison.Ordinal);
-                string clangDriver = primary.Replace("clang-cl", "clang", StringComparison.Ordinal);
-                if (!isGnu && File.Exists(clangDriver))
-                {
-                    primary = clangDriver;
-                }
-
-                if (File.Exists(primary))
-                {
-                    compilers.Add(new Candidate(primary, root.Sources.Min()));
-                }
-            }
-        }
-
-        return Candidate.Merge(compilers);
     }
 
-    internal static string ExecutableStem(string path) => OperatingSystem.IsWindows()
-        ? Path.GetFileNameWithoutExtension(path) : Path.GetFileName(path);
-
-    internal static string RelatedName(string compiler, string name, bool isGnu)
+    private static IReadOnlyList<CompilerSearchDirectory> NixAssociations(
+        string root,
+        DiscoveryContext context,
+        IReadOnlyList<CompilerSearchDirectory> directories)
     {
-        string stem = ExecutableStem(compiler);
-        string marker = isGnu ? "gcc" : stem.Contains("clang-cl", StringComparison.Ordinal) ? "clang-cl" : "clang";
-        int index = stem.LastIndexOf(marker, StringComparison.Ordinal);
-        return index < 0 ? name : stem[..index] + name + stem[(index + marker.Length)..];
+        string? compilerRoot =
+            context.GetEnvironmentVariable("NIX_CC");
+        if (directories.Count == 0
+            || string.IsNullOrWhiteSpace(compilerRoot))
+        {
+            return [];
+        }
+
+        try
+        {
+            string normalizedRoot = SearchPaths.Normalize(root);
+            string normalizedCompiler =
+                SearchPaths.Normalize(compilerRoot);
+            return SearchPaths.Related(
+                normalizedRoot,
+                normalizedCompiler)
+                ? directories
+                : [];
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or IOException
+            or NotSupportedException
+            or UnauthorizedAccessException)
+        {
+            return [];
+        }
     }
 
-    [GeneratedRegex(@"^(?:[A-Za-z0-9_+.-]+-)?(?:gcc|g\+\+)(?:-\d+(?:\.\d+)*)?$")]
-    private static partial Regex GnuName();
+    private static void AddHomebrewPrefix(
+        IDictionary<string, Source> prefixes,
+        string? value,
+        Source source)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
 
-    [GeneratedRegex(@"^(?:clang|clang\+\+|clang-cl)(?:-\d+(?:\.\d+)*)?(?:\.exe)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex ClangName();
+        string candidate = value.Trim().Trim('"');
+        if (!Directory.Exists(candidate))
+        {
+            return;
+        }
+
+        string path = Path.GetFullPath(candidate);
+        if (!prefixes.TryGetValue(path, out Source existing)
+            || source < existing)
+        {
+            prefixes[path] = source;
+        }
+    }
+
+    private static void AddHomebrewRoots(
+        ICollection<CompilerInvocationCandidate> candidates,
+        string prefix,
+        Source source,
+        CancellationToken cancellationToken)
+    {
+        AddRoot(
+            candidates,
+            Path.Combine(prefix, "bin"),
+            source,
+            isPrivate: false,
+            cancellationToken);
+        string opt = Path.Combine(prefix, "opt");
+        foreach (string directory in ReadDirectories(opt)
+            .Where(path => IsCompilerFormula(Path.GetFileName(path)))
+            .OrderBy(path => path, SearchPaths.Comparer))
+        {
+            AddRoot(
+                candidates,
+                directory,
+                source,
+                isPrivate: true,
+                cancellationToken);
+        }
+    }
+
+    private static void AddLlvmSlotRoots(
+        ICollection<CompilerInvocationCandidate> candidates,
+        string parent,
+        CancellationToken cancellationToken)
+    {
+        foreach (string directory in ReadDirectories(parent)
+            .Where(path => Path.GetFileName(path).StartsWith(
+                "llvm",
+                StringComparison.OrdinalIgnoreCase))
+            .OrderBy(path => path, SearchPaths.Comparer))
+        {
+            AddRoot(
+                candidates,
+                directory,
+                Source.StandardPath,
+                isPrivate: true,
+                cancellationToken);
+            foreach (string slot in ReadDirectories(directory)
+                .Where(path => NumericName().IsMatch(Path.GetFileName(path)))
+                .OrderBy(path => path, SearchPaths.Comparer))
+            {
+                AddRoot(
+                    candidates,
+                    slot,
+                    Source.StandardPath,
+                    isPrivate: true,
+                    cancellationToken);
+            }
+        }
+    }
+
+    private static void AddRoot(
+        ICollection<CompilerInvocationCandidate> candidates,
+        string root,
+        Source source,
+        bool? isPrivate,
+        CancellationToken cancellationToken,
+        IEnumerable<CompilerSearchDirectory>? associatedDirectories = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        string fullRoot;
+        try
+        {
+            fullRoot = Path.GetFullPath(root);
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or NotSupportedException
+            or PathTooLongException)
+        {
+            return;
+        }
+
+        if (File.Exists(fullRoot))
+        {
+            string bin = Path.GetDirectoryName(fullRoot)!;
+            candidates.Add(new CompilerInvocationCandidate(
+                fullRoot,
+                EnvironmentForBin(bin),
+                source,
+                isPrivate ?? !IsSharedDirectory(bin),
+                associatedDirectories));
+            return;
+        }
+
+        if (!Directory.Exists(fullRoot))
+        {
+            return;
+        }
+
+        string[] directories = string.Equals(
+            Path.GetFileName(fullRoot),
+            "bin",
+            StringComparison.OrdinalIgnoreCase)
+            ? [fullRoot]
+            : [fullRoot, Path.Combine(fullRoot, "bin")];
+        foreach (string directory in directories.Where(Directory.Exists))
+        {
+            bool privateDirectory = isPrivate ?? !IsSharedDirectory(directory);
+            string environment = string.Equals(
+                Path.GetFileName(directory),
+                "bin",
+                StringComparison.OrdinalIgnoreCase)
+                ? Path.GetDirectoryName(directory)!
+                : fullRoot;
+            foreach (string path in ReadFiles(directory)
+                .Where(path => CompilerName().IsMatch(Path.GetFileName(path)))
+                .OrderBy(path => path, SearchPaths.Comparer))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                candidates.Add(new CompilerInvocationCandidate(
+                    path,
+                    environment,
+                    source,
+                    privateDirectory,
+                    associatedDirectories));
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> ReadDirectories(string path)
+    {
+        try
+        {
+            return SearchPaths.Directories(path).ToArray();
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
+    private static IReadOnlyList<string> ReadFiles(string path)
+    {
+        try
+        {
+            return SearchPaths.Files(path).ToArray();
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
+    private static string EnvironmentForBin(string bin) =>
+        string.Equals(
+            Path.GetFileName(bin),
+            "bin",
+            StringComparison.OrdinalIgnoreCase)
+            ? Path.GetDirectoryName(bin)!
+            : bin;
+
+    private static bool IsCompilerFormula(string name) =>
+        name.Equals("llvm", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("gcc", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("llvm@", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("gcc@", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsHomebrewCommonBin(string unixPath) =>
+        unixPath.EndsWith("/.linuxbrew/bin", StringComparison.Ordinal)
+        || unixPath is "/opt/homebrew/bin" or "/usr/local/bin";
+
+    [GeneratedRegex(
+        @"^(?:(?:[A-Za-z0-9_+.]+-)+)?(?:gcc|g\+\+|cc|c\+\+|clang|clang\+\+|clang-cl)(?:-?\d+(?:\.\d+)*)?(?:\.exe|\.bat|\.cmd|\.py)?$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CompilerName();
+
+    [GeneratedRegex(@"^\d+(?:\.\d+)*$", RegexOptions.CultureInvariant)]
+    private static partial Regex NumericName();
 }

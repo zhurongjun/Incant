@@ -3,9 +3,9 @@ using Incant.Core.Cpp;
 namespace Incant.Core.Cpp.FindTools;
 
 /// <summary>An existing executable resolved within one toolset.</summary>
-/// <param name="Name">The requested concrete tool name.</param>
-/// <param name="Path">The absolute executable or vendor wrapper path.</param>
-/// <param name="HostArchitecture">The executable host architecture, or Unknown when not established.</param>
+/// <param name="Name">The requested tool role name.</param>
+/// <param name="Path">The absolute invocation path, preserving an executable or vendor wrapper entry.</param>
+/// <param name="HostArchitecture">The selected universal slice or launcher interpreter architecture, or Unknown when not established.</param>
 /// <param name="TargetArchitecture">The selected target architecture, or Unknown for a target-independent tool.</param>
 public sealed record Tool(
     string Name,
@@ -16,7 +16,7 @@ public sealed record Tool(
 /// <summary>Restricts a tool lookup to a host/target variant without choosing build flags.</summary>
 public sealed record ToolQuery
 {
-    /// <summary>Gets the required host binary architecture; null uses the current runnable host variant.</summary>
+    /// <summary>Gets the required host binary architecture; null prefers the current process architecture from a universal image or launcher.</summary>
     public TargetArchitecture? HostArchitecture { get; init; }
 
     /// <summary>Gets the required target binary variant, when the installation separates them.</summary>

@@ -69,6 +69,7 @@ public sealed class BundleProvider : IDiscoveryProvider
         return new DiscoveryResult([new DirectoryToolSet(kind, installation.Root, installation.Root,
             installation.Bin, installation.Version, installation.Version, compilerVersion,
             installation.Compiler, triple, installation.Channel,
-            installation.Candidate.Sources, kind == Kind.Emscripten, diagnostics)]);
+            installation.Candidate.Sources, context,
+            kind == Kind.Emscripten, diagnostics)]);
     }
 }

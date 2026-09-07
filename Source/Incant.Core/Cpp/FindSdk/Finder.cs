@@ -220,7 +220,7 @@ public sealed record SdkQuery
     /// <summary>Gets an explicit SDK or developer environment root. It restricts discovery to that installation.</summary>
     public string? RootPath { get; init; }
 
-    /// <summary>Gets an explicit compiler for development-file or compiler-reported sysroot queries.</summary>
+    /// <summary>Gets an explicit compiler invocation entry for development-file or compiler-reported sysroot queries.</summary>
     public string? CompilerPath { get; init; }
 
     /// <summary>Gets an explicitly selected sysroot for target-aware compiler queries.</summary>

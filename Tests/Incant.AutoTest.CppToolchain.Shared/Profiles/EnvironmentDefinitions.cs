@@ -65,6 +65,10 @@ internal static class EnvironmentDefinitions
             CompilerMajor("clang-16", InstallationKind.Llvm, 16),
             CompilerMajor("clang-17", InstallationKind.Llvm, 17),
             CompilerMajor("clang-18", InstallationKind.Llvm, 18),
+            CompilerExact(
+                "linuxbrew-llvm-18",
+                InstallationKind.Llvm,
+                "18.1.8"),
             .. s_crossPlatformInstallations,
         ],
     };
@@ -94,7 +98,6 @@ internal static class EnvironmentDefinitions
         MacOS15Arm64,
     ];
 
-
     private static InstallationRequirement Exact(string id, InstallationKind kind, string version)
     {
         var rule = new VersionRule(version, VersionSource.Version, VersionPrecision.Exact);
@@ -103,6 +106,21 @@ internal static class EnvironmentDefinitions
 
     private static InstallationRequirement ExactSdk(string id, InstallationKind kind, string version) =>
         new(id, kind, null, new VersionRule(version, VersionSource.Version, VersionPrecision.Exact));
+
+    private static InstallationRequirement CompilerExact(
+        string id,
+        InstallationKind kind,
+        string version) => new(
+            id,
+            kind,
+            new VersionRule(
+                version,
+                VersionSource.CompilerVersion,
+                VersionPrecision.Exact),
+            new VersionRule(
+                version,
+                VersionSource.Version,
+                VersionPrecision.Exact));
 
     private static InstallationRequirement CompilerMajor(string id, InstallationKind kind, int major)
     {

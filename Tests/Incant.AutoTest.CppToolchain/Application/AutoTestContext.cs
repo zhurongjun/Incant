@@ -20,6 +20,9 @@ internal sealed class AutoTestContext(AutoTestOptions options)
     internal IReadOnlyDictionary<string, string?> BaseEnvironment { get; set; } =
         new Dictionary<string, string?>();
 
+    internal HostExecutionCapabilities HostCapabilities { get; set; } =
+        new([options.Profile.HostArchitecture]);
+
     internal List<PipelineStageResult> Stages { get; } = [];
 
     internal List<DiscoveryProbe> DiscoveryProbes { get; } = [];

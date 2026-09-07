@@ -210,16 +210,10 @@ internal static class BundleToolchainResolver
             candidate.Invalidate("The bundle target triple is unknown.");
             return;
         }
-
-        bool permitsTranslatedHost = adapter == BuildAdapterKind.Android
-            && context.Profile.HostOS == PlatformOS.OSX
-            && context.Profile.HostArchitecture == TargetArchitecture.ARM64;
         ToolQuery query = Query(
             context,
             platform,
-            architecture,
-            constrainHost: platform != TargetPlatform.Emscripten
-                && !permitsTranslatedHost);
+            architecture);
         string[] cNames = adapter switch
         {
             BuildAdapterKind.Emscripten => [ToolNames.Emcc],
@@ -248,18 +242,23 @@ internal static class BundleToolchainResolver
             _ => throw new ArgumentOutOfRangeException(nameof(adapter), adapter, null),
         };
         Tool? cCompiler = await FindAnyToolAsync(
+            context,
             candidate,
             toolSet, cNames, query, cancellationToken).ConfigureAwait(false);
         Tool? cppCompiler = await FindAnyToolAsync(
+            context,
             candidate,
             toolSet, cppNames, query, cancellationToken).ConfigureAwait(false);
         Tool? archiver = await FindAnyToolAsync(
+            context,
             candidate,
             toolSet, archiveNames, query, cancellationToken).ConfigureAwait(false);
         Tool? ranlib = await FindAnyToolAsync(
+            context,
             candidate,
             toolSet, ranlibNames, query, cancellationToken).ConfigureAwait(false);
         Tool? linker = await FindAnyToolAsync(
+            context,
             candidate,
             toolSet, linkerNames, query, cancellationToken).ConfigureAwait(false);
         if (!RequireTools(

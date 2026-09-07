@@ -196,30 +196,53 @@ internal static class ToolchainResolution
     }
 
     internal static async Task<Tool?> FindToolAsync(
+        AutoTestContext context,
         ToolchainCandidate candidate,
         ToolSet toolSet,
         string name,
         ToolQuery query,
         CancellationToken cancellationToken)
     {
-        try
+        IEnumerable<ToolQuery> queries =
+            query.HostArchitecture is null
+                ? [query]
+                : context.HostCapabilities.Architectures.Select(
+                    architecture => query with
+                    {
+                        HostArchitecture = architecture,
+                    });
+        foreach (ToolQuery hostQuery in queries)
         {
-            return await toolSet.FindToolAsync(
-                name, query, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                Tool? tool = await toolSet.FindToolAsync(
+                    name,
+                    hostQuery,
+                    cancellationToken).ConfigureAwait(false);
+                if (tool is not null)
+                {
+                    return tool;
+                }
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                candidate.Invalidate(
+                    $"Tool '{name}' lookup failed in '{toolSet.RootPath}': "
+                    + exception.Message);
+                return null;
+            }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            candidate.Invalidate(
-                $"Tool '{name}' lookup failed in '{toolSet.RootPath}': {exception.Message}");
-            return null;
-        }
+
+        return null;
     }
 
     internal static async Task<Tool?> FindAnyToolAsync(
+        AutoTestContext context,
         ToolchainCandidate candidate,
         ToolSet toolSet,
         IReadOnlyList<string> names,
@@ -229,8 +252,14 @@ internal static class ToolchainResolution
         foreach (string name in names)
         {
             Tool? tool = await FindToolAsync(
-                candidate, toolSet, name, query, cancellationToken).ConfigureAwait(false);
-            if (tool is not null || candidate.Status == CandidateStatus.Invalid)
+                context,
+                candidate,
+                toolSet,
+                name,
+                query,
+                cancellationToken).ConfigureAwait(false);
+            if (tool is not null
+                || candidate.Status == CandidateStatus.Invalid)
             {
                 return tool;
             }
@@ -246,7 +275,7 @@ internal static class ToolchainResolution
         bool constrainHost = true) => new()
         {
             HostArchitecture = constrainHost
-                ? context.Profile.HostArchitecture
+                ? context.HostCapabilities.Architectures[0]
                 : null,
             TargetPlatform = platform,
             TargetArchitecture = architecture,

@@ -182,14 +182,17 @@ internal static class WindowsToolchainResolver
 
         ToolQuery query = Query(context, TargetPlatform.Windows, architecture);
         Tool? compiler = await FindToolAsync(
+            context,
             candidate,
             toolSet,
             ToolNames.Cl, query, cancellationToken).ConfigureAwait(false);
         Tool? archiver = await FindToolAsync(
+            context,
             candidate,
             toolSet,
             ToolNames.Lib, query, cancellationToken).ConfigureAwait(false);
         Tool? linker = await FindToolAsync(
+            context,
             candidate,
             toolSet,
             ToolNames.Link, query, cancellationToken).ConfigureAwait(false);
@@ -348,10 +351,12 @@ internal static class WindowsToolchainResolver
                         ToolQuery query = Query(
                             context, TargetPlatform.Windows, architecture);
                         Tool? compiler = await FindToolAsync(
+                            context,
                             candidate,
                             llvmToolSet,
                             ToolNames.ClangCl, query, cancellationToken).ConfigureAwait(false);
                         Tool? archiver = await FindAnyToolAsync(
+                            context,
                             candidate,
                             llvmToolSet,
                             [ToolNames.LlvmLib, ToolNames.LlvmAr],
@@ -359,10 +364,12 @@ internal static class WindowsToolchainResolver
                             cancellationToken).ConfigureAwait(false);
                         Tool? linker = flavor == LinkerFlavor.Msvc
                             ? await FindToolAsync(
+                                context,
                                 candidate,
                                 msvcToolSet.ToolSet,
                                 ToolNames.Link, query, cancellationToken).ConfigureAwait(false)
                             : await FindToolAsync(
+                                context,
                                 candidate,
                                 llvmToolSet,
                                 ToolNames.LldLink, query, cancellationToken).ConfigureAwait(false);

@@ -61,8 +61,8 @@ public sealed class DiscoveryContext
     public string? GetEnvironmentVariable(string name) => Environment.GetValueOrDefault(name);
 
     /// <summary>
-    /// Runs a read-only native executable query in the captured environment with a fixed English locale.
-    /// A nonzero exit or timeout returns null. Cancellation propagates. This does not execute shell scripts.
+    /// Runs a read-only executable entry directly in the captured environment with a fixed English locale.
+    /// A nonzero exit or timeout returns null. Cancellation propagates. The operating system may honor an entry's launcher format; no implicit command shell is inserted.
     /// </summary>
     public async Task<ProcessResult?> ProbeAsync(
         string executablePath,

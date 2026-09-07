@@ -8,14 +8,26 @@ internal sealed class CompilerProbe
 {
     private readonly DiscoveryContext _context;
 
-    private CompilerProbe(string path, string resolvedPath, DiscoveryContext context, string identityText, string? defaultTriple, Version? version)
+    private readonly string _probePath;
+
+    private CompilerProbe(
+        string path,
+        string probePath,
+        string resolvedPath,
+        DiscoveryContext context,
+        string identityText,
+        string? defaultTriple,
+        Version? version)
     {
         Path = path;
+        _probePath = probePath;
         ResolvedPath = resolvedPath;
         Version = version;
         _context = context;
         IdentityText = identityText;
-        DefaultTarget = string.IsNullOrWhiteSpace(defaultTriple) ? null : new TargetIdentity(defaultTriple.Trim());
+        DefaultTarget = string.IsNullOrWhiteSpace(defaultTriple)
+            ? null
+            : new TargetIdentity(defaultTriple.Trim());
     }
 
     internal string Path { get; }
@@ -32,14 +44,23 @@ internal sealed class CompilerProbe
 
     internal Version? Version { get; }
 
-    internal string Prefix => System.IO.Path.GetDirectoryName(System.IO.Path.GetDirectoryName(ResolvedPath))!;
+    internal string Prefix => System.IO.Path.GetDirectoryName(
+        System.IO.Path.GetDirectoryName(ResolvedPath))!;
 
-    internal static async Task<CompilerProbe?> OpenAsync(string path, DiscoveryContext context, CancellationToken cancellationToken)
+    internal static async Task<CompilerProbe?> OpenAsync(
+        string path,
+        DiscoveryContext context,
+        CancellationToken cancellationToken)
     {
-        string resolvedPath = path;
+        string probePath = path;
+        string resolvedPath = CanonicalPath(path);
         if (OperatingSystem.IsMacOS())
         {
-            AppleLocator.CompilerResolution resolution = await AppleLocator.ResolveCompilerAsync(path, context, cancellationToken).ConfigureAwait(false);
+            AppleLocator.CompilerResolution resolution =
+                await AppleLocator.ResolveCompilerAsync(
+                    path,
+                    context,
+                    cancellationToken).ConfigureAwait(false);
             if (resolution.ResolvedCompilerPath is null)
             {
                 return null;
@@ -58,13 +79,19 @@ internal sealed class CompilerProbe
             }
         }
 
-        ProcessResult? identity = await context.ProbeAsync(resolvedPath, ["--version"], cancellationToken).ConfigureAwait(false);
+        ProcessResult? identity = await context.ProbeAsync(
+            probePath,
+            ["--version"],
+            cancellationToken).ConfigureAwait(false);
         if (identity is null)
         {
             return null;
         }
 
-        ProcessResult? machine = await context.ProbeAsync(resolvedPath, ["-dumpmachine"], cancellationToken).ConfigureAwait(false);
+        ProcessResult? machine = await context.ProbeAsync(
+            probePath,
+            ["-dumpmachine"],
+            cancellationToken).ConfigureAwait(false);
         string text = identity.StandardOutput + identity.StandardError;
         if (!text.Contains("clang", StringComparison.OrdinalIgnoreCase)
             && !text.Contains("gcc", StringComparison.OrdinalIgnoreCase)
@@ -77,15 +104,36 @@ internal sealed class CompilerProbe
         Version? version = SearchPaths.CompilerVersion(text);
         if (!text.Contains("clang", StringComparison.OrdinalIgnoreCase))
         {
-            ProcessResult? reportedVersion = await context.ProbeAsync(resolvedPath,
-                ["-dumpfullversion", "-dumpversion"], cancellationToken).ConfigureAwait(false);
+            ProcessResult? reportedVersion = await context.ProbeAsync(
+                probePath,
+                ["-dumpfullversion", "-dumpversion"],
+                cancellationToken).ConfigureAwait(false);
             version = SearchPaths.Version(reportedVersion?.StandardOutput) ?? version;
         }
 
-        return new CompilerProbe(path, resolvedPath, context, text, machine?.StandardOutput.Trim(), version);
+        string? defaultTriple = machine?.StandardOutput.Trim();
+        if (string.IsNullOrWhiteSpace(defaultTriple))
+        {
+            string? targetLine = text.Split(
+                    ['\r', '\n'],
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(line => line.StartsWith("Target:", StringComparison.OrdinalIgnoreCase));
+            defaultTriple = targetLine?["Target:".Length..].Trim();
+        }
+
+        return new CompilerProbe(
+            path,
+            probePath,
+            resolvedPath,
+            context,
+            text,
+            defaultTriple,
+            version);
     }
 
-    internal async Task<CompilerTargets> FindTargetsAsync(SdkQuery query, CancellationToken cancellationToken)
+    internal async Task<CompilerTargets> FindTargetsAsync(
+        SdkQuery query,
+        CancellationToken cancellationToken)
     {
         if (query.SysrootPath is not null && !Directory.Exists(query.SysrootPath))
         {
@@ -107,7 +155,10 @@ internal sealed class CompilerProbe
         }
         else
         {
-            ProcessResult? reported = await _context.ProbeAsync(ResolvedPath, ["-print-multi-lib"], cancellationToken).ConfigureAwait(false);
+            ProcessResult? reported = await _context.ProbeAsync(
+                _probePath,
+                ["-print-multi-lib"],
+                cancellationToken).ConfigureAwait(false);
             foreach (string line in (reported?.StandardOutput ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
                 string[] parts = line.Split(';', 2);
@@ -174,7 +225,10 @@ internal sealed class CompilerProbe
         }
 
         async Task<ProcessResult?> ProbeAsync(params string[] flags) =>
-            await _context.ProbeAsync(ResolvedPath, arguments.Concat(flags).ToArray(), cancellationToken).ConfigureAwait(false);
+            await _context.ProbeAsync(
+                _probePath,
+                arguments.Concat(flags).ToArray(),
+                cancellationToken).ConfigureAwait(false);
 
         ProcessResult? macros = await ProbeAsync("-dM", "-E", "-x", "c", NullInput).ConfigureAwait(false);
         TargetArchitecture architecture = MacroArchitecture(macros?.StandardOutput);
@@ -300,8 +354,27 @@ internal sealed class CompilerProbe
             resource, includes, directories, diagnostics);
     }
 
-    internal Task<ProcessResult?> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken) =>
-        _context.ProbeAsync(ResolvedPath, arguments, cancellationToken);
+    internal Task<ProcessResult?> RunAsync(
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken) =>
+        _context.ProbeAsync(
+            _probePath,
+            arguments,
+            cancellationToken);
+
+    private static string CanonicalPath(string path)
+    {
+        try
+        {
+            return SearchPaths.Normalize(path);
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or NotSupportedException)
+        {
+            return System.IO.Path.GetFullPath(path);
+        }
+    }
 
     internal static string NullInput => OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
 

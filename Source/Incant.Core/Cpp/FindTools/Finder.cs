@@ -53,7 +53,11 @@ public sealed class Finder
             string root = SearchPaths.Normalize(snapshot.RootPath);
             candidates = candidates.Where(candidate => SearchPaths.Related(root, SearchPaths.Normalize(candidate.RootPath))
                 || candidate.CompilerPath is not null && SearchPaths.Comparer.Equals(root, SearchPaths.Normalize(candidate.CompilerPath))).ToArray();
-            if (candidates.Length == 0)
+            if (candidates.Length == 0
+                && !results.SelectMany(result => result.RecognizedInputs)
+                    .Any(path => SearchPaths.Comparer.Equals(
+                        root,
+                        SearchPaths.Normalize(path))))
             {
                 throw new DiscoveryException($"The explicit tool path '{root}' did not resolve to an installation.", diagnostics);
             }
@@ -76,6 +80,16 @@ public sealed class Finder
             .ThenByDescending(candidate => candidate.ProductVersion)
             .ThenBy(candidate => candidate.RootPath, SearchPaths.Comparer)
             .ToArray();
+        if (selected.Length == 0 && candidates.Length > 0)
+        {
+            diagnostics = diagnostics.Append(new Diagnostic(
+                DiagnosticSeverity.Info,
+                "no-matching-toolset",
+                nameof(Finder),
+                "Recognized toolset installations do not satisfy the requested version or channel constraints.",
+                snapshot.RootPath)).ToArray();
+        }
+
         return new DiscoveryResult(selected, diagnostics);
     }
 
@@ -165,11 +179,31 @@ public interface IDiscoveryProvider
 public sealed class DiscoveryResult
 {
     /// <summary>Copies the supplied collections; later caller mutations cannot change this snapshot.</summary>
-    public DiscoveryResult(IEnumerable<ToolSet>? toolSets = null, IEnumerable<Diagnostic>? diagnostics = null)
+    public DiscoveryResult(
+        IEnumerable<ToolSet>? toolSets = null,
+        IEnumerable<Diagnostic>? diagnostics = null)
+        : this(toolSets, diagnostics, [])
+    {
+    }
+
+    private DiscoveryResult(
+        IEnumerable<ToolSet>? toolSets,
+        IEnumerable<Diagnostic>? diagnostics,
+        IEnumerable<string> recognizedInputs)
     {
         ToolSets = SearchPaths.Freeze(toolSets);
         Diagnostics = SearchPaths.Freeze(diagnostics);
+        RecognizedInputs = SearchPaths.Freeze(recognizedInputs);
     }
+
+    // A recognized explicit compiler can belong to another requested family.
+    internal IReadOnlyList<string> RecognizedInputs { get; }
+
+    internal DiscoveryResult WithRecognizedInputs(
+        IEnumerable<string> paths) => new(
+            ToolSets,
+            Diagnostics,
+            RecognizedInputs.Concat(paths).Distinct(SearchPaths.Comparer));
 
     /// <summary>Gets discovered environments in selection order when returned by a Finder.</summary>
     public IReadOnlyList<ToolSet> ToolSets { get; }

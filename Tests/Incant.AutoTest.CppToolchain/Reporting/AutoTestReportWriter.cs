@@ -31,6 +31,8 @@ internal static class AutoTestReportWriter
                 context.Profile.RunnerImage,
                 context.Profile.HostOS,
                 context.Profile.HostArchitecture,
+                HostExecutionArchitectures =
+                    context.HostCapabilities.Architectures,
                 context.Profile.PipelineStages,
                 context.Profile.ExecutionCapabilities,
                 context.Profile.FailurePolicy,

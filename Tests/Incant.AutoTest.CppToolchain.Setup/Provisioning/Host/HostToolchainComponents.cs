@@ -25,15 +25,7 @@ internal static class HostToolchainComponents
                 .. profile.Installations
                     .Where(requirement => requirement.Kind is
                         InstallationKind.Gnu or InstallationKind.Llvm)
-                    .Select(requirement => new CompilerInventoryComponent(
-                        requirement,
-                        requirement.Kind == InstallationKind.Gnu
-                            ? [$"gcc-{HostToolchainUtilities.Major(requirement)}"]
-                            : [$"clang-{HostToolchainUtilities.Major(requirement)}"],
-                        requirement.Kind == InstallationKind.Gnu
-                            ? [$"g++-{HostToolchainUtilities.Major(requirement)}"]
-                            : [$"clang++-{HostToolchainUtilities.Major(requirement)}"],
-                        dependencies: ["ubuntu-packages"])),
+                    .Select(CreateLinuxCompilerComponent),
             ];
         }
 
@@ -50,6 +42,26 @@ internal static class HostToolchainComponents
 
         throw new SetupConfigurationException(
             $"No host provisioning plan is defined for '{profile.Name}'.");
+    }
+
+    private static ISetupComponent CreateLinuxCompilerComponent(
+        InstallationRequirement requirement)
+    {
+        if (requirement.Id == "linuxbrew-llvm-18")
+        {
+            return new LinuxbrewLlvmComponent(requirement);
+        }
+
+        int major = HostToolchainUtilities.Major(requirement);
+        return new CompilerInventoryComponent(
+            requirement,
+            requirement.Kind == InstallationKind.Gnu
+                ? [$"gcc-{major}"]
+                : [$"clang-{major}"],
+            requirement.Kind == InstallationKind.Gnu
+                ? [$"g++-{major}"]
+                : [$"clang++-{major}"],
+            dependencies: ["ubuntu-packages"]);
     }
 
     private static ISetupComponent CreateWindowsComponent(

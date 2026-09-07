@@ -84,38 +84,64 @@ public sealed class AppleProvider : IDiscoveryProvider
             _context = context;
         }
 
-        protected override Task<Tool?> FindToolCoreAsync(string name, ToolQuery query, CancellationToken cancellationToken) =>
-            Task.Run(async () =>
+        protected override async Task<Tool?> FindToolCoreAsync(
+            string name,
+            ToolQuery query,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string? path = SearchPaths.Executable(
+                Path.Combine(RootPath, "usr", "bin"),
+                name);
+            if (path is null && name is not "clang" and not "clang++")
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                string? path = SearchPaths.Executable(Path.Combine(RootPath, "usr", "bin"), name);
-                if (path is null && name is not "clang" and not "clang++")
+                ProcessResult? result = await _context.ProbeAsync(
+                    "/usr/bin/xcrun",
+                    [
+                        "--no-cache",
+                        "--sdk",
+                        AppleLocator.SdkName(query.TargetPlatform),
+                        "--find",
+                        name,
+                    ],
+                    cancellationToken,
+                    AppleLocator.Environment(EnvironmentPath)).ConfigureAwait(false);
+                string? reported = result?.StandardOutput.Trim();
+                if (reported is not null
+                    && Path.IsPathFullyQualified(reported)
+                    && File.Exists(reported))
                 {
-                    ProcessResult? result = await _context.ProbeAsync("/usr/bin/xcrun",
-                        ["--no-cache", "--sdk", AppleLocator.SdkName(query.TargetPlatform), "--find", name],
-                        cancellationToken, AppleLocator.Environment(EnvironmentPath)).ConfigureAwait(false);
-                    string? reported = result?.StandardOutput.Trim();
-                    if (reported is not null && Path.IsPathFullyQualified(reported) && File.Exists(reported)
-                        && SearchPaths.Contains(EnvironmentPath, SearchPaths.Normalize(reported))
-                        && (!SearchPaths.Contains(Path.Combine(EnvironmentPath, "Toolchains"), SearchPaths.Normalize(reported))
-                            || SearchPaths.Contains(RootPath, SearchPaths.Normalize(reported))))
+                    string identity = SearchPaths.Normalize(reported);
+                    if (SearchPaths.Contains(EnvironmentPath, identity)
+                        && (!SearchPaths.Contains(
+                            Path.Combine(EnvironmentPath, "Toolchains"),
+                            identity)
+                            || SearchPaths.Contains(RootPath, identity)))
                     {
                         path = reported;
                     }
                 }
+            }
 
-                if (path is null)
-                {
-                    return null;
-                }
+            if (path is null)
+            {
+                return null;
+            }
 
-                TargetArchitecture host = ExecutableArchitecture.Select(ExecutableArchitecture.Read(path), query.HostArchitecture);
-                if (query.HostArchitecture is not null && host == TargetArchitecture.Unknown)
-                {
-                    return null;
-                }
+            TargetArchitecture host =
+                await HostExecutableInspector.SelectAsync(
+                    path,
+                    query.HostArchitecture,
+                    _context,
+                    allowsLaunchers: true,
+                    cancellationToken).ConfigureAwait(false);
+            if (query.HostArchitecture is not null
+                && host == TargetArchitecture.Unknown)
+            {
+                return null;
+            }
 
-                return new Tool(name, path, host);
-            }, cancellationToken);
+            return new Tool(name, path, host);
+        }
     }
 }

@@ -3,20 +3,10 @@ using System.Buffers.Binary;
 namespace Incant.Core.Cpp;
 
 /// <summary>Reads binary headers without running a program or inferring its architecture from this process.</summary>
-internal static class ExecutableArchitecture
+internal static class BinaryImageReader
 {
     internal static IReadOnlyList<TargetArchitecture> Read(string path) =>
         ReadImages(path).Select(image => image.Architecture).Distinct().ToArray();
-
-    internal static TargetArchitecture Select(IReadOnlyList<TargetArchitecture> architectures, TargetArchitecture? requested)
-    {
-        if (requested is TargetArchitecture architecture)
-        {
-            return architectures.Contains(architecture) ? architecture : TargetArchitecture.Unknown;
-        }
-
-        return architectures.Count == 1 ? architectures[0] : TargetArchitecture.Unknown;
-    }
 
     // Null means the file format did not establish an ABI, as with a linker script or LLVM bitcode archive.
     internal static bool? MatchesTarget(string path, TargetIdentity target)

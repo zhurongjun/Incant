@@ -51,7 +51,7 @@ internal static partial class SearchPaths
     internal static string? Executable(string directory, string name, bool wrappers = false)
     {
         string[] suffixes = OperatingSystem.IsWindows()
-            ? wrappers ? [".bat", ".cmd", ".exe", ".py", ""] : [".exe", ""]
+            ? wrappers ? [".exe", ".bat", ".cmd", ".py", ""] : [".exe", ""]
             : wrappers ? ["", ".py"] : [""];
         return suffixes.Select(suffix => Path.Combine(directory, name + suffix)).FirstOrDefault(File.Exists);
     }

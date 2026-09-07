@@ -50,6 +50,10 @@ internal static partial class PreflightStage
         }
 
         context.BaseEnvironment = baseEnvironment;
+        context.HostCapabilities =
+            await InspectHostCapabilitiesAsync(
+                context,
+                cancellationToken).ConfigureAwait(false);
         AutoTestWorkspace.ResetRunDirectories(context);
         Directory.CreateDirectory(Path.GetDirectoryName(context.Options.ReportPath)!);
 
@@ -469,6 +473,55 @@ internal static partial class PreflightStage
             match.Groups["version"].Value, out Version? reported)
             ? reported
             : null;
+    }
+
+    private static async Task<HostExecutionCapabilities>
+        InspectHostCapabilitiesAsync(
+            AutoTestContext context,
+            CancellationToken cancellationToken)
+    {
+        var architectures = new List<TargetArchitecture>
+        {
+            context.Profile.HostArchitecture,
+        };
+        if (context.Profile.HostOS != PlatformOS.OSX
+            || context.Profile.HostArchitecture
+                != TargetArchitecture.ARM64)
+        {
+            return new HostExecutionCapabilities(architectures);
+        }
+
+        try
+        {
+            ProcessResult result = await Misc.RunProcessAsync(
+                "/usr/bin/arch",
+                ["-x86_64", "/usr/bin/true"],
+                new ProcessOptions
+                {
+                    Environment = context.BaseEnvironment,
+                    Timeout = TimeSpan.FromSeconds(30),
+                    EnsureUnixExecutablePermission = false,
+                },
+                cancellationToken).ConfigureAwait(false);
+            if (result.IsSuccess)
+            {
+                architectures.Add(TargetArchitecture.X64);
+            }
+        }
+        catch (OperationCanceledException) when (
+            cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or System.ComponentModel.Win32Exception
+            or InvalidOperationException)
+        {
+            // A failed translation probe means the architecture is unavailable.
+        }
+
+        return new HostExecutionCapabilities(architectures);
     }
 
     private static void ValidateHost(EnvironmentProfile profile)

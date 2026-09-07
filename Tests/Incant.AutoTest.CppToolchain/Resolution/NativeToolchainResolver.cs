@@ -185,6 +185,7 @@ internal static class NativeToolchainResolver
                         }
 
                         Tool? cCompiler = await FindToolAsync(
+                            context,
                             candidate,
                             toolSet,
                             toolSet.Kind == ToolKind.Gnu
@@ -193,6 +194,7 @@ internal static class NativeToolchainResolver
                             query,
                             cancellationToken).ConfigureAwait(false);
                         Tool? cppCompiler = await FindToolAsync(
+                            context,
                             candidate,
                             toolSet,
                             toolSet.Kind == ToolKind.Gnu
@@ -201,6 +203,7 @@ internal static class NativeToolchainResolver
                             query,
                             cancellationToken).ConfigureAwait(false);
                         Tool? archiver = await FindAnyToolAsync(
+                            context,
                             candidate,
                             toolSet,
                             toolSet.Kind == ToolKind.Gnu
@@ -209,6 +212,7 @@ internal static class NativeToolchainResolver
                             query,
                             cancellationToken).ConfigureAwait(false);
                         Tool? ranlib = await FindAnyToolAsync(
+                            context,
                             candidate,
                             toolSet,
                             toolSet.Kind == ToolKind.Gnu
@@ -217,6 +221,7 @@ internal static class NativeToolchainResolver
                             query,
                             cancellationToken).ConfigureAwait(false);
                         Tool? linker = await FindLinkerAsync(
+                            context,
                             candidate,
                             toolSet,
                             auxiliaryToolSet,
@@ -280,6 +285,7 @@ internal static class NativeToolchainResolver
     }
 
     private static Task<Tool?> FindLinkerAsync(
+        AutoTestContext context,
         ToolchainCandidate candidate,
         ToolSet toolSet,
         ToolSet? auxiliaryToolSet,
@@ -289,6 +295,7 @@ internal static class NativeToolchainResolver
         if (auxiliaryToolSet is not null)
         {
             return FindToolAsync(
+                context,
                 candidate,
                 auxiliaryToolSet,
                 ToolNames.Ld,
@@ -298,12 +305,14 @@ internal static class NativeToolchainResolver
 
         return toolSet.Kind == ToolKind.Gnu
             ? FindToolAsync(
+                context,
                 candidate,
                 toolSet,
                 ToolNames.Ld,
                 query,
                 cancellationToken)
             : FindAnyToolAsync(
+                context,
                 candidate,
                 toolSet,
                 [ToolNames.LdLld, ToolNames.Ld],

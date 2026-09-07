@@ -10,70 +10,68 @@ public sealed class CompilerProvider : IDiscoveryProvider
     public string Name => "GCC/LLVM";
 
     /// <inheritdoc />
-    public IReadOnlyCollection<Kind> Kinds { get; } = Array.AsReadOnly(new[] { Kind.Gnu, Kind.Llvm });
+    public IReadOnlyCollection<Kind> Kinds { get; } =
+        Array.AsReadOnly(new[] { Kind.Gnu, Kind.Llvm });
 
     /// <inheritdoc />
-    public async Task<DiscoveryResult> DiscoverAsync(ToolSetQuery query, DiscoveryContext context, CancellationToken cancellationToken)
+    public async Task<DiscoveryResult> DiscoverAsync(
+        ToolSetQuery query,
+        DiscoveryContext context,
+        CancellationToken cancellationToken)
     {
-        Kind[] kinds = Kinds.Where(kind => query.Kind is null || query.Kind == kind).ToArray();
-        var tasks = new List<Task<DiscoveryResult>>();
-        foreach (Kind kind in kinds)
+        CompilerDiscoveryResult discovery =
+            await CompilerInstallation.DiscoverAsync(
+                query.RootPath,
+                context,
+                cancellationToken).ConfigureAwait(false);
+        CompilerInstallation[] supported = discovery.Installations
+            .Where(installation =>
+                installation.Family is CompilerFamily.Gnu
+                    or CompilerFamily.Llvm)
+            .ToArray();
+        ToolSet[] toolSets = supported
+            .Where(installation => Matches(
+                installation.Family,
+                query.Kind))
+            .Select(installation =>
+                (ToolSet)new CompilerToolSet(installation, context))
+            .ToArray();
+        var diagnostics = new List<Diagnostic>(discovery.Failures
+            .Where(failure => failure.Sources.Contains(Source.Explicit)
+                || failure.Sources.Contains(Source.Environment))
+            .Select(failure => new Diagnostic(
+                DiagnosticSeverity.Warning,
+                "invalid-candidate",
+                Name,
+                failure.Message,
+                failure.Path)));
+        if (query.RootPath is not null
+            && query.Kind is Kind.Gnu or Kind.Llvm
+            && discovery.Installations.Count > 0
+            && toolSets.Length == 0)
         {
-            IReadOnlyList<Candidate> candidates = await CompilerLocator.FindAsync(kind == Kind.Gnu, query.RootPath,
-                context, cancellationToken).ConfigureAwait(false);
-            tasks.AddRange(candidates.Select(candidate => Task.Run(
-                () => InspectAsync(kind, candidate, context, cancellationToken), cancellationToken)));
+            diagnostics.Add(new Diagnostic(
+                DiagnosticSeverity.Info,
+                "different-toolset-family",
+                Name,
+                "The recognized compiler belongs to a different toolset family.",
+                query.RootPath));
         }
 
-        DiscoveryResult[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
-        return new DiscoveryResult(results.SelectMany(result => result.ToolSets), results.SelectMany(result => result.Diagnostics));
+        var result = new DiscoveryResult(toolSets, diagnostics);
+        return query.RootPath is not null
+            && discovery.Installations.Count > 0
+                ? result.WithRecognizedInputs([query.RootPath])
+                : result;
     }
 
-    private async Task<DiscoveryResult> InspectAsync(Kind kind, Candidate candidate, DiscoveryContext context, CancellationToken cancellationToken)
-    {
-        try
+    private static bool Matches(
+        CompilerFamily family,
+        Kind? kind) => kind switch
         {
-            ProcessResult? identity = await context.ProbeAsync(candidate.Path, ["--version"], cancellationToken).ConfigureAwait(false);
-            string text = identity?.StandardOutput + identity?.StandardError;
-            bool isClang = text.Contains("clang", StringComparison.OrdinalIgnoreCase);
-            if (identity is null || isClang != (kind == Kind.Llvm)
-                || text.Contains("Apple clang", StringComparison.OrdinalIgnoreCase))
-            {
-                return Invalid(candidate);
-            }
-
-            Version? version = SearchPaths.CompilerVersion(text);
-            if (kind == Kind.Gnu)
-            {
-                ProcessResult? result = await context.ProbeAsync(candidate.Path, ["-dumpfullversion", "-dumpversion"], cancellationToken).ConfigureAwait(false);
-                version = SearchPaths.Version(result?.StandardOutput) ?? version;
-            }
-
-            ProcessResult? target = await context.ProbeAsync(candidate.Path, ["-dumpmachine"], cancellationToken).ConfigureAwait(false);
-            string? triple = target?.StandardOutput.Trim();
-            if (string.IsNullOrWhiteSpace(triple))
-            {
-                triple = text.Split('\n').FirstOrDefault(line => line.StartsWith("Target:", StringComparison.Ordinal))?["Target:".Length..].Trim();
-            }
-
-            if (triple?.Contains("mingw", StringComparison.OrdinalIgnoreCase) == true)
-            {
-                return new DiscoveryResult();
-            }
-
-            string bin = Path.GetDirectoryName(candidate.Path)!;
-            var toolSet = new DirectoryToolSet(kind, bin, Path.GetDirectoryName(bin)!, bin,
-                version, version, version, candidate.Path, triple, SearchPaths.Channel(text),
-                candidate.Sources);
-            return new DiscoveryResult([toolSet]);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            return Invalid(candidate, exception.Message);
-        }
-    }
-
-    private DiscoveryResult Invalid(Candidate candidate, string? message = null) => new(diagnostics:
-        [new Diagnostic(DiagnosticSeverity.Warning, "invalid-candidate", Name,
-            message ?? "The compiler identity could not be established.", candidate.Path)]);
+            null => true,
+            Kind.Gnu => family == CompilerFamily.Gnu,
+            Kind.Llvm => family == CompilerFamily.Llvm,
+            _ => false,
+        };
 }
