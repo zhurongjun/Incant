@@ -51,25 +51,27 @@ dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configurati
 
 ## 工具链 AutoTest
 
-- Core 单元测试只通过公开 Provider 接口构造受控候选，验证 Cpp.FindTools / Cpp.FindSdk 的调度、筛选、选择、目标别名和不可变快照；不得读取本机安装、Registry 或网络。
+旧验收条件逐项归类及扩展方式见 [ToolchainAutoTestChecks.md](ToolchainAutoTestChecks.md)。
+
+- Core 单元测试通过公开 Finder/Provider API 构造受控候选或合成安装目录与启动器，验证 Cpp.FindTools / Cpp.FindSdk 的调度、筛选、选择、目标别名和不可变快照；不得读取本机安装、Registry 或网络。
 - 依赖真实安装的验证统一由 `Incant.AutoTest.CppToolchain` 承担。它不提供自由组合的发现参数，而是公开 `windows-vs2022`、`windows-vs2026`、`ubuntu-24.04` 和 `macos-15-arm64` 四个完整环境 Profile。
-- 每个 Profile 固定环境要求、安装范围、目标组合和执行能力，并依次运行 `Preflight`、`Discover`、`Resolve`、`Validate`、`Build` 和 `Execute`。候选之间互不回退；某个候选失败只跳过依赖它的动作。
-- CI Setup 写出 schema version 1 的环境清单，记录实际安装根目录、版本、来源、局部环境和运行时。AutoTest 将这些路径作为候选边界，并通过 Finder 重新确认身份。
-- 每个声明安装均执行无约束、种类、版本和显式根目录发现，比较身份快照，并覆盖不存在路径、错误版本和错误目标等负向行为。
+- 每个 Profile 分开声明预装家族覆盖、主动部署安装及目标场景，并依次运行 `Preflight`、`Discover`、`Resolve`、`Build` 和 `Execute`。候选之间互不回退；某个候选失败只跳过依赖它的动作。
+- CI Setup 写出 schema version 1 的环境清单，记录实际安装根目录、版本、来源、局部环境和运行时。AutoTest 对主动部署路径应用候选边界及声明版本范围；预装安装来自全局 Finder 发现，旧清单的预装记录不恢复固定版本门槛。
+- 全局分别执行一次 ToolSet/SDK 自动发现；主动部署安装执行显式查询，目标 SDK 查询按构建需要复用。查询筛选、无效输入、ABI/变体隔离、部分安装、别名、wrapper、入口优先级、取消、快照和独立安装由受控黑盒单元测试承接。
 - 固定签入的 C/C++ 资产用于编译多个对象、创建和检查静态库、链接纯 C 程序、构建共享库、链接 C++ 程序及运行可执行产物。Emscripten 另测默认与 `pic`/side-module 布局；WASI 使用 Wasmtime 执行。
 - AutoTest 只读取环境清单和安装，不下载依赖或修改全局环境。额外 SDK 由 `Tests/Incant.AutoTest.CppToolchain.Setup` 安装到 `build/toolchains`，各候选的环境变量仅传给对应进程。
-- 报告总是在 `finally` 中写出，包含完整发现结果、候选决策、诊断、动作、退出码、耗时、日志和产物。宿主/清单配置错误返回 2，测试失败返回 1，成功返回 0，取消返回 130。
+- schema 2 报告总是在 `finally` 中写出，集中保存安装与 SDK 快照，场景通过 ID 引用，并包含覆盖结果、失败/跳过原因、诊断、动作、退出码、耗时、日志和产物。宿主/清单配置错误返回 2，测试失败返回 1，成功返回 0，取消返回 130。
 - 本机只能声明实际执行过的 Profile；四个 GitHub runner 的 matrix 结果才构成跨平台功能验收。
 
 ```shell
 # Core 局部单元测试
-dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Cpp.FindTools.FinderTests
+dotnet test --project Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Cpp.FindTools.FinderTests
 
 # SDK 资源、查询语义与 WASI 目标别名测试
-dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Cpp.FindSdk.FinderTests
+dotnet test --project Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Cpp.FindSdk.FinderTests
 
 # Core 完整单元测试
-dotnet test Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj
+dotnet test --project Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj
 
 # 使用 CI Setup 生成的清单运行一个完整环境 Profile
 Incant.AutoTest.CppToolchain windows-vs2022

@@ -27,6 +27,10 @@ internal sealed class AutoTestContext(AutoTestOptions options)
 
     internal List<DiscoveryProbe> DiscoveryProbes { get; } = [];
 
+    internal Dictionary<string, DiscoveryProbe> SdkQueries { get; } = new(StringComparer.Ordinal);
+
+    internal List<CoverageResult> Coverage { get; } = [];
+
     internal List<Diagnostic> Diagnostics { get; } = [];
 
     internal List<InstallationDiscovery> Installations { get; } = [];
@@ -92,23 +96,16 @@ internal sealed class AutoTestContext(AutoTestOptions options)
         Manifest?.Runtimes.FirstOrDefault(runtime => runtime.Kind == kind
             && (installationId is null || runtime.InstallationId == installationId));
 
-    internal bool RequiredCandidatesSatisfy(
+    internal bool CandidatesSatisfy(
         Func<ToolchainCandidate, bool> predicate) =>
-        RequiredCandidatesSatisfy(Candidates, predicate);
+        CandidatesSatisfy(Candidates, predicate);
 
-    internal bool RequiredCandidatesSatisfy(
+    internal bool CandidatesSatisfy(
         IEnumerable<ToolchainCandidate> candidates,
         Func<ToolchainCandidate, bool> predicate)
     {
-        IEnumerable<ToolchainCandidate> required = candidates.Where(
-            candidate => candidate.Required);
-        return Profile.FailurePolicy.RequireAllRequiredCandidates
-            ? required.All(predicate)
-            : required.Any(predicate);
+        return candidates.Where(candidate => candidate.Required || candidate.Status != CandidateStatus.Skipped).All(predicate);
     }
-
-    internal bool ContinueAfter(ToolchainCandidate candidate) =>
-        !candidate.Failed || Profile.FailurePolicy.ContinueAfterCandidateFailure;
 
     internal static IReadOnlyDictionary<string, string?> CaptureEnvironment()
     {

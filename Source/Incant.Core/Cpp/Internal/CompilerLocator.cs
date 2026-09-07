@@ -64,18 +64,6 @@ internal static partial class CompilerLocator
         return CompilerInvocationCandidate.Merge(candidates);
     }
 
-    internal static string ExecutableStem(string path)
-    {
-        string fileName = Path.GetFileName(path);
-        string extension = Path.GetExtension(fileName);
-        return OperatingSystem.IsWindows()
-            || extension.Equals(".bat", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".py", StringComparison.OrdinalIgnoreCase)
-                ? Path.GetFileNameWithoutExtension(fileName)
-                : fileName;
-    }
-
     internal static bool IsSharedDirectory(string path)
     {
         string normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
@@ -485,7 +473,7 @@ internal static partial class CompilerLocator
                 ? Path.GetDirectoryName(directory)!
                 : fullRoot;
             foreach (string path in ReadFiles(directory)
-                .Where(path => CompilerName().IsMatch(Path.GetFileName(path)))
+                .Where(path => CompilerName.Parse(path) is not null)
                 .OrderBy(path => path, SearchPaths.Comparer))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -543,11 +531,6 @@ internal static partial class CompilerLocator
     private static bool IsHomebrewCommonBin(string unixPath) =>
         unixPath.EndsWith("/.linuxbrew/bin", StringComparison.Ordinal)
         || unixPath is "/opt/homebrew/bin" or "/usr/local/bin";
-
-    [GeneratedRegex(
-        @"^(?:(?:[A-Za-z0-9_+.]+-)+)?(?:gcc|g\+\+|cc|c\+\+|clang|clang\+\+|clang-cl)(?:-?\d+(?:\.\d+)*)?(?:\.exe|\.bat|\.cmd|\.py)?$",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex CompilerName();
 
     [GeneratedRegex(@"^\d+(?:\.\d+)*$", RegexOptions.CultureInvariant)]
     private static partial Regex NumericName();

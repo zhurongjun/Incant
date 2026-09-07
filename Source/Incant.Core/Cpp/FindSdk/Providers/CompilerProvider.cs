@@ -20,94 +20,40 @@ public sealed class CompilerProvider : IDiscoveryProvider
 
     /// <inheritdoc />
     public async Task<DiscoveryResult> DiscoverAsync(
-        SdkQuery query,
-        DiscoveryContext context,
-        CancellationToken cancellationToken)
+        SdkQuery query, DiscoveryContext context, CancellationToken cancellationToken)
     {
-        var installations = new List<CompilerInstallation>();
-        var candidates = new List<Candidate>();
+        var candidates = new List<CompilerInvocationCandidate>();
         var diagnostics = new List<Diagnostic>();
-        var recognizedInputs = new List<string>();
-
-        if (query.CompilerPath is not null
-            || query.Kind is null or Kind.Gnu or Kind.Llvm)
+        if (query.CompilerPath is not null || query.Kind is null or Kind.Gnu or Kind.Llvm)
         {
-            CompilerDiscoveryResult compilerDiscovery =
-                await CompilerInstallation.DiscoverAsync(
-                    query.CompilerPath ?? query.RootPath,
-                    context,
-                    cancellationToken).ConfigureAwait(false);
-            installations.AddRange(
-                compilerDiscovery.Installations.Where(
-                    installation =>
-                        (query.CompilerPath is not null
-                            || Matches(
-                                installation.Family,
-                                query.Kind))
-                        && (query.CompilerPath is not null
-                            || installation.Family
-                                != CompilerFamily.AppleClang)));
-            diagnostics.AddRange(compilerDiscovery.Failures
-                .Where(failure =>
-                    failure.Sources.Contains(Source.Explicit)
-                    || failure.Sources.Contains(Source.Environment))
-                .Select(failure => Resources.Missing(
-                    Name,
-                    failure.Message,
-                    failure.Path)));
-            string? explicitInput =
-                query.CompilerPath ?? query.RootPath;
-            if (explicitInput is not null
-                && compilerDiscovery.Installations.Count > 0)
-            {
-                recognizedInputs.Add(explicitInput);
-                if (query.CompilerPath is null
-                    && query.Kind is Kind.Gnu or Kind.Llvm
-                    && installations.Count == 0)
-                {
-                    diagnostics.Add(new Diagnostic(
-                        DiagnosticSeverity.Info,
-                        "different-sdk-family",
-                        Name,
-                        "The recognized compiler belongs to a different SDK family.",
-                        explicitInput));
-                }
-            }
+            candidates.AddRange(await CompilerLocator.FindAsync(query.CompilerPath ?? query.RootPath,
+                context, cancellationToken).ConfigureAwait(false));
         }
 
         if (query.CompilerPath is null)
         {
             if (query.Kind is null or Kind.Llvm)
             {
-                BundleDiscoveryResult[] bundles =
-                    await Task.WhenAll(Enum.GetValues<BundleKind>()
-                        .Select(kind => BundleLocator.FindAsync(
-                            kind,
-                            query.RootPath,
-                            context,
-                            cancellationToken))).ConfigureAwait(false);
+                BundleDiscoveryResult[] bundles = await Task.WhenAll(Enum.GetValues<BundleKind>()
+                    .Select(kind => BundleLocator.FindAsync(kind, query.RootPath, context, cancellationToken)))
+                    .ConfigureAwait(false);
                 foreach (BundleDiscoveryResult bundle in bundles)
                 {
                     diagnostics.AddRange(bundle.Diagnostics);
-                    foreach (BundleInstallation installation
-                        in bundle.Installations)
+                    foreach (BundleInstallation installation in bundle.Installations)
                     {
-                        string? compiler =
-                            installation.Kind == BundleKind.Emscripten
-                                ? SearchPaths.Executable(
-                                    Path.GetFullPath(Path.Combine(
-                                        installation.Root,
-                                        "..",
-                                        "bin")),
-                                    "clang")
-                                : installation.Compiler;
+                        string? compiler = installation.Kind == BundleKind.Emscripten
+                            ? SearchPaths.Executable(Path.GetFullPath(Path.Combine(installation.Root, "..", "bin")), "clang")
+                            : installation.Compiler;
                         if (compiler is not null)
                         {
-                            candidates.Add(new Candidate(
-                                compiler,
-                                installation.Candidate.Sources.Min(),
-                                installation.Version,
-                                installation.Channel));
+                            candidates.Add(new CompilerInvocationCandidate(
+                                compiler, Path.GetDirectoryName(Path.GetDirectoryName(compiler))!,
+                                installation.Candidate.Sources, CompilerDiscoveryAnchor.Directory, true)
+                            {
+                                ProductVersion = installation.Version,
+                                ProductChannel = installation.Channel,
+                            });
                         }
                     }
                 }
@@ -115,264 +61,108 @@ public sealed class CompilerProvider : IDiscoveryProvider
 
             if (query.Kind is null or Kind.AppleClang)
             {
-                await AddAppleCandidatesAsync(
-                    query,
-                    context,
-                    candidates,
-                    cancellationToken).ConfigureAwait(false);
+                await AddAppleCandidatesAsync(query, context, candidates, cancellationToken).ConfigureAwait(false);
             }
         }
 
-        Task<DiscoveryResult>[] installationTasks = installations
-            .Select(installation => InspectAsync(
-                installation.Probe,
-                installation.InvocationPath,
-                installation.Family == CompilerFamily.AppleClang
-                    ? null
-                    : installation.EnvironmentPath,
-                productVersion: null,
-                installation.Channel,
-                installation.Sources,
-                query,
-                context,
-                cancellationToken))
-            .ToArray();
-        Task<DiscoveryResult>[] candidateTasks = Candidate.Merge(candidates)
-            .Select(candidate => InspectAsync(
-                candidate,
-                query,
-                context,
-                cancellationToken))
-            .ToArray();
-        DiscoveryResult[] results = await Task.WhenAll(
-            installationTasks.Concat(candidateTasks))
-            .ConfigureAwait(false);
-        return new DiscoveryResult(
-            results.SelectMany(result => result.Sdks),
-            diagnostics.Concat(results.SelectMany(
-                result => result.Diagnostics)))
-            .WithRecognizedInputs(recognizedInputs.Concat(
-                results.SelectMany(
-                    result => result.RecognizedInputs)));
+        CompilerDiscoveryResult discovery = await CompilerInstallation.InspectCandidatesAsync(
+            candidates, context, cancellationToken).ConfigureAwait(false);
+        diagnostics.AddRange(discovery.Failures
+            .Where(failure => failure.Sources.Contains(Source.Explicit) || failure.Sources.Contains(Source.Environment))
+            .Select(failure => Resources.Missing(Name, failure.Message, failure.Path)));
+        DiscoveryResult[] results = await Task.WhenAll(discovery.Installations
+            .Select(installation => InspectAsync(installation, query, cancellationToken))).ConfigureAwait(false);
+        string? explicitInput = query.CompilerPath ?? query.RootPath;
+        IEnumerable<string> recognizedInputs = explicitInput is not null && discovery.Installations.Count > 0
+            ? [explicitInput] : [];
+        return new DiscoveryResult(results.SelectMany(result => result.Sdks),
+            diagnostics.Concat(results.SelectMany(result => result.Diagnostics)).Distinct())
+            .WithRecognizedInputs(recognizedInputs.Concat(results.SelectMany(result => result.RecognizedInputs)));
     }
 
-    private static bool Matches(
-        CompilerFamily family,
-        Kind? kind) => kind switch
-        {
-            null => true,
-            Kind.Gnu => family == CompilerFamily.Gnu,
-            Kind.Llvm => family == CompilerFamily.Llvm,
-            Kind.AppleClang => family == CompilerFamily.AppleClang,
-            _ => false,
-        };
-
     private static async Task AddAppleCandidatesAsync(
-        SdkQuery query,
-        DiscoveryContext context,
-        ICollection<Candidate> candidates,
+        SdkQuery query, DiscoveryContext context, ICollection<CompilerInvocationCandidate> candidates,
         CancellationToken cancellationToken)
     {
-        foreach (Candidate developer
-            in await AppleLocator.EnvironmentsAsync(
-                query.RootPath,
-                context,
-                cancellationToken).ConfigureAwait(false))
+        foreach (Candidate developer in await AppleLocator.EnvironmentsAsync(
+            query.RootPath, context, cancellationToken).ConfigureAwait(false))
         {
-            IReadOnlyDictionary<string, string?> environment =
-                AppleLocator.Environment(developer.Path);
-            ProcessResult? product = Directory.Exists(
-                Path.Combine(developer.Path, "Platforms"))
-                ? await context.ProbeAsync(
-                    "/usr/bin/xcodebuild",
-                    ["-version"],
-                    cancellationToken,
-                    environment).ConfigureAwait(false)
-                : null;
-            Version? productVersion = SearchPaths.Version(
-                product?.StandardOutput);
-            Channel channel = SearchPaths.Channel(
-                string.Join(
-                    ' ',
-                    developer.Path,
-                    product?.StandardOutput));
-            foreach (string root in SearchPaths.Directories(
-                Path.Combine(developer.Path, "Toolchains"))
-                .Append(developer.Path))
+            IReadOnlyDictionary<string, string?> environment = AppleLocator.Environment(developer.Path);
+            ProcessResult? product = Directory.Exists(Path.Combine(developer.Path, "Platforms"))
+                ? await context.ProbeAsync("/usr/bin/xcodebuild", ["-version"], cancellationToken, environment)
+                    .ConfigureAwait(false) : null;
+            Version? productVersion = SearchPaths.Version(product?.StandardOutput);
+            Channel channel = SearchPaths.Channel(string.Join(' ', developer.Path, product?.StandardOutput));
+            foreach (string root in SearchPaths.Directories(Path.Combine(developer.Path, "Toolchains")).Append(developer.Path))
             {
-                string? compiler = SearchPaths.Executable(
-                    Path.Combine(root, "usr", "bin"),
-                    "clang");
+                string? compiler = SearchPaths.Executable(Path.Combine(root, "usr", "bin"), "clang");
                 if (compiler is not null)
                 {
-                    candidates.Add(new Candidate(
-                        compiler,
-                        developer.Sources.Min(),
-                        productVersion,
-                        channel));
+                    candidates.Add(new CompilerInvocationCandidate(compiler, developer.Path,
+                        developer.Sources, CompilerDiscoveryAnchor.Directory, true)
+                    {
+                        ProductVersion = productVersion,
+                        ProductChannel = channel,
+                    });
                 }
             }
         }
     }
 
     private async Task<DiscoveryResult> InspectAsync(
-        Candidate candidate,
-        SdkQuery query,
-        DiscoveryContext context,
-        CancellationToken cancellationToken)
+        CompilerInstallation installation, SdkQuery query, CancellationToken cancellationToken)
     {
-        try
+        CompilerProbe compiler = installation.Probe;
+        Kind kind = installation.Family switch
         {
-            CompilerProbe? compiler = await CompilerProbe.OpenAsync(
-                candidate.Path,
-                context,
-                cancellationToken).ConfigureAwait(false);
-            if (compiler is null)
-            {
-                return new DiscoveryResult(diagnostics:
-                [
-                    Resources.Missing(
-                        Name,
-                        "The compiler identity query failed.",
-                        candidate.Path),
-                ]);
-            }
-
-            return await InspectAsync(
-                compiler,
-                candidate.Path,
-                knownEnvironmentPath: null,
-                candidate.ProductVersion,
-                candidate.Channel,
-                candidate.Sources,
-                query,
-                context,
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException
-            or NotSupportedException)
-        {
-            return new DiscoveryResult(diagnostics:
-            [
-                Resources.Missing(
-                    Name,
-                    exception.Message,
-                    candidate.Path),
-            ]);
-        }
-    }
-
-    private async Task<DiscoveryResult> InspectAsync(
-        CompilerProbe compiler,
-        string invocationPath,
-        string? knownEnvironmentPath,
-        Version? productVersion,
-        Channel? knownChannel,
-        IReadOnlyList<Source> sources,
-        SdkQuery query,
-        DiscoveryContext context,
-        CancellationToken cancellationToken)
-    {
-        Kind kind = compiler.IsApple
-            ? Kind.AppleClang
-            : compiler.IsClang
-                ? Kind.Llvm
-                : Kind.Gnu;
+            CompilerFamily.Gnu => Kind.Gnu,
+            CompilerFamily.Llvm => Kind.Llvm,
+            CompilerFamily.AppleClang => Kind.AppleClang,
+            _ => throw new ArgumentOutOfRangeException(nameof(installation)),
+        };
         if (query.Kind is not null && kind != query.Kind)
         {
             return new DiscoveryResult(diagnostics:
             [
-                new Diagnostic(
-                    DiagnosticSeverity.Info,
-                    "different-sdk-family",
-                    Name,
-                    "The recognized compiler belongs to a different SDK family.",
-                    invocationPath),
-            ]).WithRecognizedInputs([invocationPath]);
+                new Diagnostic(DiagnosticSeverity.Info, "different-sdk-family", Name,
+                    "The recognized compiler belongs to a different SDK family.", installation.InvocationPath),
+            ]).WithRecognizedInputs([installation.InvocationPath]);
         }
 
-        CompilerTargets targets = await compiler.FindTargetsAsync(
-            query,
-            cancellationToken).ConfigureAwait(false);
-        Task<TargetLayout>[] tasks = targets.Targets
-            .Select(target => CollectAsync(
-                target,
-                cancellationToken))
-            .ToArray();
-        TargetLayout[] layouts =
-            await Task.WhenAll(tasks).ConfigureAwait(false);
-        var diagnostics = new List<Diagnostic>(
-            targets.Diagnostics);
-        string root = targets.Targets
-            .Select(target => target.ResourceDirectory)
-            .FirstOrDefault(path => path is not null)
-            ?? compiler.Prefix;
-        string? developerPath = compiler.IsApple
-            ? AppleLocator.FindDeveloper(compiler.ResolvedPath)
-            : null;
-        if (compiler.IsApple && developerPath is null)
+        try
         {
-            diagnostics.Add(new Diagnostic(
-                DiagnosticSeverity.Warning,
-                "unknown-developer-environment",
-                Name,
-                "The Apple compiler could not be assigned to an Xcode or Command Line Tools environment.",
-                compiler.ResolvedPath));
-        }
-
-        string? productIdentity = null;
-        if (developerPath is not null
-            && productVersion is null
-            && Directory.Exists(Path.Combine(
-                developerPath,
-                "Platforms")))
-        {
-            ProcessResult? product = await context.ProbeAsync(
-                "/usr/bin/xcodebuild",
-                ["-version"],
-                cancellationToken,
-                AppleLocator.Environment(
-                    developerPath)).ConfigureAwait(false);
-            productIdentity = product?.StandardOutput;
-            productVersion = SearchPaths.Version(productIdentity);
-            if (productVersion is null)
+            CompilerTargets targets = await compiler.FindTargetsAsync(query, cancellationToken).ConfigureAwait(false);
+            TargetLayout[] layouts = await Task.WhenAll(targets.Targets.Select(target =>
+                CollectAsync(target, cancellationToken))).ConfigureAwait(false);
+            string root = targets.Targets.Select(target => target.ResourceDirectory).FirstOrDefault(path => path is not null)
+                ?? compiler.Prefix;
+            var diagnostics = new List<Diagnostic>(targets.Diagnostics);
+            if (compiler.IsApple && !Directory.Exists(Path.Combine(installation.EnvironmentPath, "SDKs"))
+                && !Directory.Exists(Path.Combine(installation.EnvironmentPath, "Platforms")))
             {
-                diagnostics.Add(new Diagnostic(
-                    DiagnosticSeverity.Warning,
-                    "unknown-product-version",
-                    Name,
-                    "The Xcode product version could not be established.",
-                    developerPath));
+                diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning, "unknown-developer-environment", Name,
+                    "The Apple compiler has no confirmed SDK environment.", installation.EnvironmentPath));
             }
-        }
 
-        string environmentPath = knownEnvironmentPath
-            ?? (compiler.IsApple
-                ? developerPath ?? root
-                : Path.GetDirectoryName(
-                    Path.GetDirectoryName(
-                        compiler.ResolvedPath))!);
-        Channel channel = knownChannel ?? SearchPaths.Channel(
-            string.Join(
-                ' ',
-                developerPath,
-                productIdentity,
-                compiler.IdentityText));
-        return new DiscoveryResult(
-        [
-            new Sdk(
-                kind,
-                root,
-                layouts,
-                compiler.Version,
-                environmentPath,
-                productVersion,
-                invocationPath,
-                channel,
-                sources,
-                diagnostics),
-        ]);
+            if (compiler.IsApple && installation.ProductVersion is null
+                && Directory.Exists(Path.Combine(installation.EnvironmentPath, "Platforms")))
+            {
+                diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning, "unknown-product-version", Name,
+                    "The Xcode product version could not be established.", installation.EnvironmentPath));
+            }
+
+            return new DiscoveryResult(
+            [
+                new Sdk(kind, root, layouts, compiler.Version, installation.EnvironmentPath,
+                    installation.ProductVersion, installation.InvocationPath, installation.Channel,
+                    installation.Sources, diagnostics),
+            ]);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return new DiscoveryResult(diagnostics: [Resources.Missing(Name, exception.Message, installation.InvocationPath)])
+                .WithRecognizedInputs([installation.InvocationPath]);
+        }
     }
 
     private async Task<TargetLayout> CollectAsync(CompilerTarget target, CancellationToken cancellationToken)

@@ -25,16 +25,16 @@ internal sealed class CompilerInvocationCandidate
     {
     }
 
-    private CompilerInvocationCandidate(
+    internal CompilerInvocationCandidate(
         string invocationPath,
         string environmentPath,
         IEnumerable<Source> sources,
         CompilerDiscoveryAnchor discoveryAnchor,
         bool isPrivateDirectory,
-        IEnumerable<CompilerSearchDirectory>? associatedSearchDirectories)
+        IEnumerable<CompilerSearchDirectory>? associatedSearchDirectories = null)
     {
         InvocationPath = Path.GetFullPath(invocationPath);
-        CanonicalPath = Canonicalize(invocationPath);
+        CanonicalPath = SearchPaths.InvocationIdentity(invocationPath);
         EnvironmentPath = Path.TrimEndingDirectorySeparator(
             Path.GetFullPath(environmentPath));
         Sources = SearchPaths.Freeze(sources.Distinct().Order());
@@ -43,6 +43,10 @@ internal sealed class CompilerInvocationCandidate
         AssociatedSearchDirectories = SearchPaths.Freeze(
             MergeDirectories(associatedSearchDirectories ?? []));
     }
+
+    internal Version? ProductVersion { get; init; }
+
+    internal Channel? ProductChannel { get; init; }
 
     internal string InvocationPath { get; }
 
@@ -75,23 +79,13 @@ internal sealed class CompilerInvocationCandidate
                 preferred.DiscoveryAnchor,
                 ordered.All(candidate => candidate.IsPrivateDirectory),
                 ordered.SelectMany(
-                    candidate => candidate.AssociatedSearchDirectories));
+                    candidate => candidate.AssociatedSearchDirectories))
+            {
+                ProductVersion = ordered.Select(candidate => candidate.ProductVersion).FirstOrDefault(value => value is not null),
+                ProductChannel = ordered.Select(candidate => candidate.ProductChannel).FirstOrDefault(value => value is not null),
+            };
         })
         .ToArray();
-
-    private static string Canonicalize(string path)
-    {
-        try
-        {
-            return SearchPaths.Normalize(path);
-        }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException
-            or NotSupportedException)
-        {
-            return Path.GetFullPath(path);
-        }
-    }
 
     private static IEnumerable<CompilerSearchDirectory> MergeDirectories(
         IEnumerable<CompilerSearchDirectory> directories) => directories

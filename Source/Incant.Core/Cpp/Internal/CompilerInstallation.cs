@@ -26,11 +26,14 @@ internal sealed class CompilerInstallation
         CompilerFamily family,
         IReadOnlyList<string> aliases,
         IReadOnlyList<CompilerSearchDirectory> searchDirectories,
-        IReadOnlyList<Source> sources)
+        IReadOnlyList<Source> sources,
+        CompilerMetadata metadata)
     {
         InvocationPath = primary.InvocationPath;
-        CanonicalPath = primary.CanonicalPath;
-        EnvironmentPath = primary.EnvironmentPath;
+        CanonicalPath = probe.ResolvedPath;
+        EnvironmentPath = metadata.EnvironmentPath;
+        ProductVersion = metadata.ProductVersion;
+        Channel = metadata.Channel;
         Probe = probe;
         Family = family;
         Aliases = aliases;
@@ -54,7 +57,9 @@ internal sealed class CompilerInstallation
 
     internal string? DefaultTargetTriple => Probe.DefaultTarget?.Triple;
 
-    internal Channel Channel => SearchPaths.Channel(Probe.IdentityText);
+    internal Channel Channel { get; }
+
+    internal Version? ProductVersion { get; }
 
     internal IReadOnlyList<string> Aliases { get; }
 
@@ -72,7 +77,15 @@ internal sealed class CompilerInstallation
                 explicitRoot,
                 context,
                 cancellationToken).ConfigureAwait(false);
-        Task<CompilerInspection>[] tasks = candidates
+        return await InspectCandidatesAsync(candidates, context, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<CompilerDiscoveryResult> InspectCandidatesAsync(
+        IEnumerable<CompilerInvocationCandidate> candidates,
+        DiscoveryContext context,
+        CancellationToken cancellationToken)
+    {
+        Task<CompilerInspection>[] tasks = CompilerInvocationCandidate.Merge(candidates)
             .Select(candidate => InspectAsync(
                 candidate,
                 context,
@@ -86,7 +99,7 @@ internal sealed class CompilerInstallation
             .ToArray();
         CompilerInstallation[] installations = inspections
             .Where(inspection => inspection.Probe is not null)
-            .GroupBy(inspection => Identity(inspection.Candidate, inspection.Probe!))
+            .GroupBy(inspection => Identity(inspection.Probe!))
             .Select(Create)
             .ToArray();
         return new CompilerDiscoveryResult(installations, failures);
@@ -121,7 +134,9 @@ internal sealed class CompilerInstallation
                 return new CompilerInspection(candidate, null, null);
             }
 
-            return new CompilerInspection(candidate, probe, null);
+            CompilerMetadata metadata = await InspectMetadataAsync(candidate, probe, context, cancellationToken)
+                .ConfigureAwait(false);
+            return new CompilerInspection(candidate, probe, null, metadata);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -167,7 +182,7 @@ internal sealed class CompilerInstallation
                 invocationDirectory,
                 inspection.Candidate.IsPrivateDirectory);
             string canonicalDirectory = Path.GetDirectoryName(
-                inspection.Candidate.CanonicalPath)!;
+                inspection.Probe!.ResolvedPath)!;
             AddDirectory(
                 searchDirectories,
                 canonicalDirectory,
@@ -188,24 +203,16 @@ internal sealed class CompilerInstallation
             group.Key.Family,
             aliases.ToArray(),
             searchDirectories.ToArray(),
-            inspections
-                .SelectMany(inspection => inspection.Candidate.Sources)
-                .Distinct()
-                .Order()
-                .ToArray());
+            inspections.SelectMany(inspection => inspection.Candidate.Sources).Distinct().Order().ToArray(),
+            preferred.Metadata!);
     }
 
     private static CompilerInstallationIdentity Identity(
-        CompilerInvocationCandidate candidate,
         CompilerProbe probe)
     {
-        CompilerFamily family = probe.IsApple
-            ? CompilerFamily.AppleClang
-            : probe.IsClang
-                ? CompilerFamily.Llvm
-                : CompilerFamily.Gnu;
+        CompilerFamily family = probe.Family;
         string canonicalDirectory = Path.GetDirectoryName(
-            candidate.CanonicalPath)!;
+            probe.ResolvedPath)!;
         string pathKey = OperatingSystem.IsWindows()
             ? canonicalDirectory.ToUpperInvariant()
             : canonicalDirectory;
@@ -216,15 +223,7 @@ internal sealed class CompilerInstallation
             probe.DefaultTarget?.Canonical);
     }
 
-    private static int DriverRank(string path)
-    {
-        string stem = CompilerLocator.ExecutableStem(path).ToLowerInvariant();
-        return stem.Contains("++", StringComparison.Ordinal)
-            ? 2
-            : stem.Contains("clang-cl", StringComparison.Ordinal)
-                ? 1
-                : 0;
-    }
+    private static int DriverRank(string path) => CompilerName.Parse(path)?.DriverRank ?? 0;
 
     private static int InvocationRank(string path)
     {
@@ -281,10 +280,35 @@ internal sealed class CompilerInstallation
         }
     }
 
+    private static async Task<CompilerMetadata> InspectMetadataAsync(
+        CompilerInvocationCandidate candidate, CompilerProbe probe,
+        DiscoveryContext context, CancellationToken cancellationToken)
+    {
+        string environment = probe.IsApple
+            ? AppleLocator.FindDeveloper(probe.ResolvedPath) ?? candidate.EnvironmentPath
+            : candidate.EnvironmentPath;
+        Version? productVersion = candidate.ProductVersion;
+        string? productIdentity = null;
+        if (probe.IsApple && productVersion is null && candidate.ProductChannel is null && Directory.Exists(Path.Combine(environment, "Platforms")))
+        {
+            Incant.Base.ProcessResult? product = await context.ProbeAsync("/usr/bin/xcodebuild", ["-version"],
+                cancellationToken, AppleLocator.Environment(environment)).ConfigureAwait(false);
+            productIdentity = product?.StandardOutput;
+            productVersion = SearchPaths.Version(productIdentity);
+        }
+
+        Channel channel = candidate.ProductChannel
+            ?? SearchPaths.Channel(string.Join(' ', probe.IdentityText, productIdentity, probe.IsApple ? environment : null));
+        return new CompilerMetadata(environment, productVersion, channel);
+    }
+
+    private sealed record CompilerMetadata(string EnvironmentPath, Version? ProductVersion, Channel Channel);
+
     private sealed record CompilerInspection(
         CompilerInvocationCandidate Candidate,
         CompilerProbe? Probe,
-        CompilerInspectionFailure? Failure);
+        CompilerInspectionFailure? Failure,
+        CompilerMetadata? Metadata = null);
 
     private sealed record CompilerInstallationIdentity(
         CompilerFamily Family,

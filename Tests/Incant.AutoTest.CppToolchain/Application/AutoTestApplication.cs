@@ -20,7 +20,7 @@ internal static class AutoTestApplication
         Console.CancelKeyPress += cancelHandler;
         try
         {
-            await SerialTestPipeline.Create(context.Profile).RunAsync(
+            await SerialTestPipeline.Create().RunAsync(
                 context, cancellation.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)

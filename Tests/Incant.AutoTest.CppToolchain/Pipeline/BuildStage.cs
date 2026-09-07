@@ -32,14 +32,9 @@ internal static class BuildStage
                 candidate.Failures.Add(
                     $"Build plan creation failed: {exception.Message}");
             }
-
-            if (!context.ContinueAfter(candidate))
-            {
-                break;
-            }
         }
 
-        return context.RequiredCandidatesSatisfy(
+        return context.CandidatesSatisfy(
             candidates,
             candidate => candidate.Status == CandidateStatus.Resolved);
     }

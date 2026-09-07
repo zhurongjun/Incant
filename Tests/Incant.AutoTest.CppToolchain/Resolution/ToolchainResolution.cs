@@ -85,80 +85,11 @@ internal static class ToolchainResolution
         }
     }
 
-    internal static void EnsureCoverage(AutoTestContext context)
-    {
-        foreach (InstallationRequirement requirement in context.Profile.Installations
-            .Where(requirement => requirement.Required))
-        {
-            bool resolved = context.Candidates.Any(candidate =>
-                Covers(requirement, context, candidate));
-            if (!resolved)
-            {
-                AddInvalid(
-                    context,
-                    requirement.Id + "-no-resolved-candidate",
-                    [requirement.Id],
-                    "No complete build candidate was resolved for this required installation.");
-            }
-        }
-    }
+    internal static bool BelongsTo(InstallationManifest manifest, ToolSet toolSet) =>
+        InstallationIdentity.Contains(manifest, toolSet);
 
-    private static bool Covers(
-        InstallationRequirement requirement,
-        AutoTestContext context,
-        ToolchainCandidate candidate)
-    {
-        if (candidate.Status != CandidateStatus.Resolved
-            || candidate.Toolchain is not ResolvedToolchain toolchain)
-        {
-            return false;
-        }
-
-        InstallationManifest manifest = context.Installations
-            .Single(installation => installation.Requirement.Id == requirement.Id)
-            .Manifest;
-        bool HasToolSet(ToolKind kind) =>
-            toolchain.ToolSet.Kind == kind
-            && BelongsTo(manifest, toolchain.ToolSet);
-        bool HasSdk(SdkKind kind) => toolchain.Sdks.Any(component =>
-            component.Sdk.Kind == kind
-            && BelongsTo(manifest, component.Sdk));
-        return requirement.Kind switch
-        {
-            InstallationKind.VisualStudio => HasToolSet(ToolKind.VisualStudio)
-                && HasSdk(SdkKind.Msvc),
-            InstallationKind.WindowsSdk => HasSdk(SdkKind.Windows),
-            InstallationKind.Gnu => HasToolSet(ToolKind.Gnu) && HasSdk(SdkKind.Gnu),
-            InstallationKind.Llvm => HasToolSet(ToolKind.Llvm) && HasSdk(SdkKind.Llvm),
-            InstallationKind.Xcode => HasToolSet(ToolKind.Xcode)
-                && HasSdk(SdkKind.AppleClang)
-                && HasSdk(SdkKind.Apple),
-            InstallationKind.AndroidNdk => HasToolSet(ToolKind.AndroidNdk)
-                && HasSdk(SdkKind.AndroidNdk),
-            InstallationKind.Emscripten => HasToolSet(ToolKind.Emscripten)
-                && HasSdk(SdkKind.Emscripten),
-            InstallationKind.WasiSdk => HasToolSet(ToolKind.WasiSdk)
-                && HasSdk(SdkKind.WasiSdk),
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(requirement), requirement.Kind, null),
-        };
-    }
-
-    internal static bool BelongsTo(
-        InstallationManifest manifest,
-        ToolSet toolSet) =>
-        Related(manifest.RootPath, toolSet.RootPath)
-        || Related(manifest.RootPath, toolSet.EnvironmentPath)
-        || toolSet.CompilerPath is not null
-            && Related(manifest.RootPath, toolSet.CompilerPath);
-
-    internal static bool BelongsTo(
-        InstallationManifest manifest,
-        Sdk sdk) =>
-        Related(manifest.RootPath, sdk.RootPath)
-        || Related(manifest.RootPath, sdk.EnvironmentPath)
-        || sdk.CompilerPath is not null
-            && Related(manifest.RootPath, sdk.CompilerPath);
+    internal static bool BelongsTo(InstallationManifest manifest, Sdk sdk) =>
+        InstallationIdentity.Contains(manifest, sdk);
 
     internal static void AddInvalid(
         AutoTestContext context,
@@ -171,7 +102,9 @@ internal static class ToolchainResolution
             return;
         }
 
-        var candidate = new ToolchainCandidate(id, installationIds);
+        var candidate = new ToolchainCandidate(id, installationIds,
+            context.Installations.Any(owner => owner.Managed && owner.Requirement.Required
+                && installationIds.Contains(owner.Requirement.Id)));
         candidate.Invalidate(reason);
         context.Candidates.Add(candidate);
     }
@@ -210,7 +143,7 @@ internal static class ToolchainResolution
                     architecture => query with
                     {
                         HostArchitecture = architecture,
-                    });
+                    }).Append(query with { HostArchitecture = null });
         foreach (ToolQuery hostQuery in queries)
         {
             try
@@ -219,7 +152,10 @@ internal static class ToolchainResolution
                     name,
                     hostQuery,
                     cancellationToken).ConfigureAwait(false);
-                if (tool is not null)
+                if (tool is not null
+                    && (hostQuery.HostArchitecture is not null
+                        || tool.HostArchitecture == TargetArchitecture.Unknown
+                        || context.HostCapabilities.Architectures.Contains(tool.HostArchitecture)))
                 {
                     return tool;
                 }
@@ -231,7 +167,7 @@ internal static class ToolchainResolution
             }
             catch (Exception exception)
             {
-                candidate.Invalidate(
+                candidate.Decisions.Add(
                     $"Tool '{name}' lookup failed in '{toolSet.RootPath}': "
                     + exception.Message);
                 return null;
@@ -271,12 +207,9 @@ internal static class ToolchainResolution
     internal static ToolQuery Query(
         AutoTestContext context,
         TargetPlatform platform,
-        TargetArchitecture architecture,
-        bool constrainHost = true) => new()
+        TargetArchitecture architecture) => new()
         {
-            HostArchitecture = constrainHost
-                ? context.HostCapabilities.Architectures[0]
-                : null,
+            HostArchitecture = context.HostCapabilities.Architectures[0],
             TargetPlatform = platform,
             TargetArchitecture = architecture,
         };
@@ -285,17 +218,10 @@ internal static class ToolchainResolution
         Sdk sdk,
         TargetPlatform platform,
         TargetArchitecture architecture,
-        string? triple = null,
         string? multilib = null)
     {
         IEnumerable<TargetLayout> layouts = sdk.Layouts.Where(layout =>
             layout.Platform == platform && layout.Architecture == architecture);
-        if (triple is not null)
-        {
-            layouts = layouts.Where(layout => layout.TargetTriple is not null
-                && TargetTripleIdentity.AreEquivalent(layout.TargetTriple, triple));
-        }
-
         if (multilib is not null)
         {
             layouts = layouts.Where(layout => layout.Multilib == multilib);
@@ -303,12 +229,6 @@ internal static class ToolchainResolution
 
         return layouts.FirstOrDefault();
     }
-
-    internal static Sdk? FindMsvcSdk(
-        ToolSet toolSet,
-        IEnumerable<Sdk> sdks) => sdks
-            .Where(sdk => MsvcIdentityMatches(toolSet, sdk))
-            .SingleOrDefault();
 
     internal static bool MsvcIdentityMatches(ToolSet toolSet, Sdk sdk) =>
         toolSet.Kind == ToolKind.VisualStudio
@@ -375,13 +295,7 @@ internal static class ToolchainResolution
             _ => TargetPlatform.Unknown,
         };
         return platform == hostPlatform
-            && (architecture == context.Profile.HostArchitecture
-                || context.Profile.HostOS == PlatformOS.Windows
-                    && context.Profile.HostArchitecture == TargetArchitecture.X64
-                    && architecture == TargetArchitecture.X86
-                || context.Profile.HostOS == PlatformOS.Linux
-                    && context.Profile.HostArchitecture == TargetArchitecture.X64
-                    && architecture == TargetArchitecture.X86);
+            && context.HostCapabilities.Architectures.Contains(architecture);
     }
 
     internal static string WindowsTriple(TargetArchitecture architecture) =>
@@ -416,10 +330,6 @@ internal static class ToolchainResolution
     internal static bool SamePath(string left, string right) =>
         PathIdentity.AreEqual(left, right);
 }
-
-internal sealed record ToolSetOwner(
-    InstallationDiscovery Owner,
-    ToolSet ToolSet);
 
 internal sealed record SdkOwner(
     InstallationDiscovery Owner,

@@ -82,7 +82,7 @@ internal sealed class ResolvedToolchain
 
     internal Tool? Ranlib { get; init; }
 
-    internal required Tool Linker { get; init; }
+    internal Tool? Linker { get; init; }
 
     internal required IReadOnlyDictionary<string, string?> Environment { get; init; }
 

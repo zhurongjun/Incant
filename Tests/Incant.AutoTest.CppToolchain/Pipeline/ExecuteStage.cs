@@ -31,13 +31,10 @@ internal static class ExecuteStage
             }
 
             SerialBuildScheduler.DeleteSuccessfulWork(context, candidate);
-            if (!context.ContinueAfter(candidate))
-            {
-                break;
-            }
         }
 
-        return context.RequiredCandidatesSatisfy(
+        bool coverage = ToolchainCoverage.Evaluate(context, completed: true);
+        return coverage && context.CandidatesSatisfy(
             candidates,
             candidate => candidate.Status == CandidateStatus.Passed);
     }

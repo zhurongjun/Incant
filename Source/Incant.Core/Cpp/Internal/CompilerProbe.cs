@@ -17,7 +17,8 @@ internal sealed class CompilerProbe
         DiscoveryContext context,
         string identityText,
         string? defaultTriple,
-        Version? version)
+        Version? version,
+        CompilerFamily family)
     {
         Path = path;
         _probePath = probePath;
@@ -25,6 +26,7 @@ internal sealed class CompilerProbe
         Version = version;
         _context = context;
         IdentityText = identityText;
+        Family = family;
         DefaultTarget = string.IsNullOrWhiteSpace(defaultTriple)
             ? null
             : new TargetIdentity(defaultTriple.Trim());
@@ -36,9 +38,11 @@ internal sealed class CompilerProbe
 
     internal string IdentityText { get; }
 
-    internal bool IsClang => IdentityText.Contains("clang", StringComparison.OrdinalIgnoreCase);
+    internal CompilerFamily Family { get; }
 
-    internal bool IsApple => IdentityText.Contains("Apple clang", StringComparison.OrdinalIgnoreCase);
+    internal bool IsClang => Family is CompilerFamily.Llvm or CompilerFamily.AppleClang;
+
+    internal bool IsApple => Family == CompilerFamily.AppleClang;
 
     internal TargetIdentity? DefaultTarget { get; }
 
@@ -53,7 +57,7 @@ internal sealed class CompilerProbe
         CancellationToken cancellationToken)
     {
         string probePath = path;
-        string resolvedPath = CanonicalPath(path);
+        string resolvedPath = SearchPaths.InvocationIdentity(path);
         if (OperatingSystem.IsMacOS())
         {
             AppleLocator.CompilerResolution resolution =
@@ -93,16 +97,14 @@ internal sealed class CompilerProbe
             ["-dumpmachine"],
             cancellationToken).ConfigureAwait(false);
         string text = identity.StandardOutput + identity.StandardError;
-        if (!text.Contains("clang", StringComparison.OrdinalIgnoreCase)
-            && !text.Contains("gcc", StringComparison.OrdinalIgnoreCase)
-            && !text.Contains("g++", StringComparison.OrdinalIgnoreCase)
-            && !text.Contains("Free Software Foundation", StringComparison.OrdinalIgnoreCase))
+        CompilerFamily? family = Classify(text);
+        if (family is null)
         {
             return null;
         }
 
         Version? version = SearchPaths.CompilerVersion(text);
-        if (!text.Contains("clang", StringComparison.OrdinalIgnoreCase))
+        if (family == CompilerFamily.Gnu)
         {
             ProcessResult? reportedVersion = await context.ProbeAsync(
                 probePath,
@@ -128,8 +130,17 @@ internal sealed class CompilerProbe
             context,
             text,
             defaultTriple,
-            version);
+            version,
+            family.Value);
     }
+
+    private static CompilerFamily? Classify(string identity) =>
+        identity.Contains("Apple clang", StringComparison.OrdinalIgnoreCase) ? CompilerFamily.AppleClang
+        : identity.Contains("clang", StringComparison.OrdinalIgnoreCase) ? CompilerFamily.Llvm
+        : identity.Contains("gcc", StringComparison.OrdinalIgnoreCase)
+            || identity.Contains("g++", StringComparison.OrdinalIgnoreCase)
+            || identity.Contains("Free Software Foundation", StringComparison.OrdinalIgnoreCase)
+                ? CompilerFamily.Gnu : null;
 
     internal async Task<CompilerTargets> FindTargetsAsync(
         SdkQuery query,
@@ -361,20 +372,6 @@ internal sealed class CompilerProbe
             _probePath,
             arguments,
             cancellationToken);
-
-    private static string CanonicalPath(string path)
-    {
-        try
-        {
-            return SearchPaths.Normalize(path);
-        }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException
-            or NotSupportedException)
-        {
-            return System.IO.Path.GetFullPath(path);
-        }
-    }
 
     internal static string NullInput => OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
 

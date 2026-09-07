@@ -1,7 +1,5 @@
 using Incant.Base;
 using Incant.Core.Cpp;
-using ResourcePurpose = Incant.Core.Cpp.FindSdk.ResourcePurpose;
-using SdkKind = Incant.Core.Cpp.FindSdk.Kind;
 
 namespace Incant.AutoTest.CppToolchain;
 
@@ -10,7 +8,6 @@ internal enum PipelineStageKind
     Preflight,
     Discover,
     Resolve,
-    Validate,
     Build,
     Execute,
 }
@@ -23,11 +20,6 @@ internal enum ExecutionCapability
     Node = 1 << 1,
     Wasmtime = 1 << 2,
 }
-
-internal sealed record PipelineFailurePolicy(
-    bool ContinueAfterStageFailure,
-    bool ContinueAfterCandidateFailure,
-    bool RequireAllRequiredCandidates);
 
 internal sealed class EnvironmentProfile
 {
@@ -45,15 +37,7 @@ internal sealed class EnvironmentProfile
 
     internal IReadOnlyList<InstallationRequirement> Installations => Definition.Installations;
 
-    internal required IReadOnlyList<PipelineStageKind> PipelineStages { get; init; }
-
     internal required ExecutionCapability ExecutionCapabilities { get; init; }
-
-    internal required PipelineFailurePolicy FailurePolicy { get; init; }
-
-    internal required IReadOnlyDictionary<SdkKind, IReadOnlyList<ResourcePurpose>>
-        RequiredSdkResources
-    { get; init; }
 
     internal IReadOnlyList<TargetArchitecture> NativeArchitectures { get; init; } = [];
 
@@ -62,8 +46,6 @@ internal sealed class EnvironmentProfile
     internal IReadOnlyList<TargetArchitecture> WindowsMsvcArchitectures { get; init; } = [];
 
     internal IReadOnlyList<TargetArchitecture> WindowsLlvmArchitectures { get; init; } = [];
-
-    internal bool UseExistingMsvcTargetsForNonDefaultToolSets { get; init; }
 
     internal IReadOnlyList<TargetPlatform> ApplePlatforms { get; init; } = [];
 

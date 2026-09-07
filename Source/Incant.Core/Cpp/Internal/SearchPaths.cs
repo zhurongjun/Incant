@@ -4,6 +4,28 @@ namespace Incant.Core.Cpp;
 
 internal static partial class SearchPaths
 {
+    internal static string InvocationIdentity(string path)
+    {
+        try
+        {
+            return Normalize(path);
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException or NotSupportedException)
+        {
+            return Path.GetFullPath(path);
+        }
+    }
+
+    internal static int SourcePriority(IReadOnlyList<Source> sources) =>
+        sources.Count == 0 ? int.MaxValue : (int)sources.Min();
+
+    internal static string PathKey(string path)
+    {
+        string normalized = Normalize(path);
+        return OperatingSystem.IsWindows() ? normalized.ToUpperInvariant() : normalized;
+    }
+
     internal static StringComparer Comparer =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 

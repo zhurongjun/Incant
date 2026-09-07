@@ -1,6 +1,6 @@
 namespace Incant.AutoTest.CppToolchain.Setup;
 
-internal sealed class UbuntuPackagesComponent : ISetupComponent
+internal sealed class UbuntuPackagesComponent(IReadOnlyList<InstallationRequirement> requirements) : ISetupComponent
 {
     public string Id => "ubuntu-packages";
 
@@ -26,16 +26,10 @@ internal sealed class UbuntuPackagesComponent : ISetupComponent
                 Attempts: 3,
                 RetryDelay: TimeSpan.FromSeconds(2)),
             cancellationToken).ConfigureAwait(false);
-        string[] packages =
-        [
-            "gcc-12", "g++-12", "gcc-12-multilib", "g++-12-multilib",
-            "gcc-13", "g++-13", "gcc-13-multilib", "g++-13-multilib",
-            "gcc-14", "g++-14", "gcc-14-multilib", "g++-14-multilib",
-            "clang-16", "llvm-16", "lld-16",
-            "clang-17", "llvm-17", "lld-17",
-            "clang-18", "llvm-18", "lld-18",
-            "unzip", "xz-utils",
-        ];
+        string[] packages = requirements
+            .Where(requirement => requirement.Provisioning == ProvisioningMethod.Default
+                && requirement.Kind is InstallationKind.Gnu or InstallationKind.Llvm)
+            .SelectMany(Packages).Concat(["unzip", "xz-utils"]).Distinct(StringComparer.Ordinal).ToArray();
         await context.Commands.RunAsync(
             sudo,
             ["apt-get", "install", "--yes", "--no-install-recommends", .. packages],
@@ -46,6 +40,14 @@ internal sealed class UbuntuPackagesComponent : ISetupComponent
                 RetryDelay: TimeSpan.FromSeconds(2)),
             cancellationToken).ConfigureAwait(false);
         return ProvisioningResult.Empty;
+    }
+
+    private static IEnumerable<string> Packages(InstallationRequirement requirement)
+    {
+        int major = HostToolchainUtilities.Major(requirement);
+        return requirement.Kind == InstallationKind.Gnu
+            ? [$"gcc-{major}", $"g++-{major}", $"gcc-{major}-multilib", $"g++-{major}-multilib"]
+            : [$"clang-{major}", $"llvm-{major}", $"lld-{major}"];
     }
 }
 

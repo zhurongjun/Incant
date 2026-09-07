@@ -1,23 +1,11 @@
-using System.Text.RegularExpressions;
 using Incant.Base;
 using Incant.Core.Cpp;
 
 namespace Incant.Core.Cpp.FindTools;
 
 /// <summary>Resolves one logical compiler-tool role from installation-local evidence.</summary>
-internal static partial class ToolRoleResolver
+internal static class ToolRoleResolver
 {
-    private static readonly string[] s_driverNames =
-    [
-        "clang-cl",
-        "clang++",
-        "clang",
-        "g++",
-        "gcc",
-        "c++",
-        "cc",
-    ];
-
     internal static async Task<Tool?> FindAsync(
         CompilerInstallation installation,
         string name,
@@ -127,7 +115,7 @@ internal static partial class ToolRoleResolver
             .ThenBy(candidate => candidate.DirectoryRank)
             .ThenBy(candidate => candidate.NameRank)
             .ThenBy(
-                candidate => CanonicalPath(candidate.Path),
+                candidate => SearchPaths.InvocationIdentity(candidate.Path),
                 SearchPaths.Comparer)
             .ThenBy(candidate => candidate.Path, SearchPaths.Comparer)
             .ToArray();
@@ -150,7 +138,7 @@ internal static partial class ToolRoleResolver
 
         foreach (string alias in installation.Aliases)
         {
-            DriverIdentity? identity = ParseDriver(alias);
+            CompilerName? identity = CompilerName.Parse(alias);
             if (identity is null)
             {
                 if (SearchPaths.Comparer.Equals(
@@ -175,7 +163,7 @@ internal static partial class ToolRoleResolver
             {
                 AddName(
                     names,
-                    CompilerLocator.ExecutableStem(alias));
+                    CompilerName.ExecutableStem(alias));
             }
 
             foreach (string roleName in roleNames)
@@ -313,11 +301,7 @@ internal static partial class ToolRoleResolver
             return false;
         }
 
-        CompilerFamily family = probe.IsApple
-            ? CompilerFamily.AppleClang
-            : probe.IsClang
-                ? CompilerFamily.Llvm
-                : CompilerFamily.Gnu;
+        CompilerFamily family = probe.Family;
         return family == installation.Family
             && probe.Version == installation.Version
             && TargetIdentity.AreEquivalent(
@@ -397,26 +381,12 @@ internal static partial class ToolRoleResolver
         string path,
         CompilerInstallation installation)
     {
-        string canonical = CanonicalPath(path);
+        string canonical = SearchPaths.InvocationIdentity(path);
         return installation.SearchDirectories.Any(directory =>
             directory.IsPrivate
             && SearchPaths.Contains(
-                CanonicalPath(directory.Path),
+                SearchPaths.InvocationIdentity(directory.Path),
                 canonical));
-    }
-
-    private static string CanonicalPath(string path)
-    {
-        try
-        {
-            return SearchPaths.Normalize(path);
-        }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException
-            or NotSupportedException)
-        {
-            return Path.GetFullPath(path);
-        }
     }
 
     private static bool HasCompilerVersionSuffix(
@@ -428,7 +398,7 @@ internal static partial class ToolRoleResolver
             return false;
         }
 
-        string stem = CompilerLocator.ExecutableStem(path);
+        string stem = CompilerName.ExecutableStem(path);
         return stem.EndsWith(
             "-" + version.Major,
             StringComparison.Ordinal)
@@ -446,7 +416,7 @@ internal static partial class ToolRoleResolver
             return false;
         }
 
-        string stem = CompilerLocator.ExecutableStem(path);
+        string stem = CompilerName.ExecutableStem(path);
         if (stem.StartsWith(triple + "-", StringComparison.Ordinal))
         {
             return true;
@@ -460,36 +430,7 @@ internal static partial class ToolRoleResolver
                 canonicalTriple);
     }
 
-    private static DriverIdentity? ParseDriver(string path)
-    {
-        string stem = CompilerLocator.ExecutableStem(path);
-        foreach (string marker in s_driverNames)
-        {
-            int index = stem.LastIndexOf(
-                marker,
-                StringComparison.OrdinalIgnoreCase);
-            if (index < 0)
-            {
-                continue;
-            }
-
-            string suffix = stem[(index + marker.Length)..];
-            if (suffix.Length == 0
-                || VersionSuffix().IsMatch(suffix))
-            {
-                return new DriverIdentity(
-                    stem[..index],
-                    marker,
-                    suffix);
-            }
-        }
-
-        return null;
-    }
-
-    private static bool IsDriver(string role) => s_driverNames.Contains(
-        role,
-        StringComparer.Ordinal);
+    private static bool IsDriver(string role) => CompilerName.IsDriver(role);
 
     private static bool CanUsePrimaryDriver(
         CompilerFamily family,
@@ -520,25 +461,18 @@ internal static partial class ToolRoleResolver
         }
     }
 
-    private static bool IsCompatibleDriver(
-        CompilerFamily family,
-        string requested,
-        string actual) => family switch
+    private static bool IsCompatibleDriver(CompilerFamily family, string requested, string actual)
+    {
+        if (requested == "clang-cl")
         {
-            CompilerFamily.Gnu =>
-                (requested is "gcc" or "cc"
-                    && actual is "gcc" or "cc")
-                || (requested is "g++" or "c++"
-                    && actual is "g++" or "c++"),
-            CompilerFamily.Llvm or CompilerFamily.AppleClang =>
-                (requested is "clang" or "cc"
-                    && actual is "clang" or "cc")
-                || (requested is "clang++" or "c++"
-                    && actual is "clang++" or "c++")
-                || (requested == "clang-cl"
-                    && actual == "clang-cl"),
-            _ => false,
-        };
+            return family != CompilerFamily.Gnu && actual == "clang-cl";
+        }
+
+        bool requestedCpp = requested is "g++" or "c++" or "clang++";
+        bool actualCpp = actual is "g++" or "c++" or "clang++";
+        return CanUsePrimaryDriver(family, requested)
+            && actual != "clang-cl" && requestedCpp == actualCpp;
+    }
 
     private static bool IsManagedRole(
         CompilerFamily family,
@@ -567,16 +501,6 @@ internal static partial class ToolRoleResolver
             names.Add(name);
         }
     }
-
-    [GeneratedRegex(
-        @"^-?\d+(?:\.\d+)*$",
-        RegexOptions.CultureInvariant)]
-    private static partial Regex VersionSuffix();
-
-    private sealed record DriverIdentity(
-        string Prefix,
-        string Driver,
-        string VersionSuffix);
 
     private sealed record RoleCandidate(
         string Path,

@@ -46,7 +46,7 @@ public sealed class Finder
         ToolSet[] candidates = results.SelectMany(result => result.ToolSets)
             .Where(candidate => snapshot.Kind is null || candidate.Kind == snapshot.Kind).ToArray();
         Diagnostic[] diagnostics = results.SelectMany(result => result.Diagnostics)
-            .Concat(candidates.SelectMany(candidate => candidate.Diagnostics)).ToArray();
+            .Concat(candidates.SelectMany(candidate => candidate.Diagnostics)).Distinct().ToArray();
 
         if (snapshot.RootPath is not null)
         {
@@ -69,12 +69,12 @@ public sealed class Finder
                 && snapshot.ProductVersion?.Matches(candidate.ProductVersion) is not false
                 && snapshot.CompilerVersion?.Matches(candidate.CompilerVersion) is not false)
             .GroupBy(candidate => (candidate.Kind,
-                Root: PathKey(candidate.RootPath),
-                Compiler: candidate.CompilerPath is null ? null : PathKey(candidate.CompilerPath),
+                Root: SearchPaths.PathKey(candidate.RootPath),
+                Compiler: candidate.CompilerPath is null ? null : SearchPaths.PathKey(candidate.CompilerPath),
                 candidate.Version, candidate.DefaultTargetTriple))
-            .Select(group => group.OrderBy(candidate => Priority(candidate.Sources)).First()
+            .Select(group => group.OrderBy(candidate => SearchPaths.SourcePriority(candidate.Sources)).First()
                 .WithSources(group.SelectMany(candidate => candidate.Sources).Distinct().Order()))
-            .OrderBy(candidate => Priority(candidate.Sources))
+            .OrderBy(candidate => SearchPaths.SourcePriority(candidate.Sources))
             .ThenBy(candidate => candidate.Channel == Channel.Stable ? 0 : 1)
             .ThenByDescending(candidate => candidate.Version)
             .ThenByDescending(candidate => candidate.ProductVersion)
@@ -104,14 +104,6 @@ public sealed class Finder
     /// <summary>Synchronously waits for <see cref="FindToolSetAsync"/>.</summary>
     public ToolSet? FindToolSet(ToolSetQuery? query = null, CancellationToken cancellationToken = default) =>
         FindToolSetAsync(query, cancellationToken).GetAwaiter().GetResult();
-
-    private static int Priority(IReadOnlyList<Source> sources) => sources.Count == 0 ? int.MaxValue : (int)sources.Min();
-
-    private static string PathKey(string path)
-    {
-        string normalized = SearchPaths.Normalize(path);
-        return OperatingSystem.IsWindows() ? normalized.ToUpperInvariant() : normalized;
-    }
 
     private static async Task<DiscoveryResult> RunProviderAsync(
         IDiscoveryProvider provider, ToolSetQuery query, DiscoveryContext context, CancellationToken cancellationToken)

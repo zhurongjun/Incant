@@ -16,4 +16,6 @@ internal sealed class EnvironmentDefinition
     internal required string RunnerImage { get; init; }
 
     internal required IReadOnlyList<InstallationRequirement> Installations { get; init; }
+
+    internal required IReadOnlyList<InstallationKind> RequiredHostFamilies { get; init; }
 }

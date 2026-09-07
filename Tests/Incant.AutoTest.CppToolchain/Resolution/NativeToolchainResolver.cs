@@ -106,13 +106,12 @@ internal static class NativeToolchainResolver
                                     platformSdk.Sdk,
                                     platform,
                                     compilerLayout.Architecture,
-                                    triple,
                                     compilerLayout.Multilib);
                         string id = CreateId(
                             toolSet.Kind == ToolKind.Gnu ? "gnu" : "llvm",
                             owner.Requirement.Id,
                             toolSet.CompilerVersion,
-                            TargetTripleIdentity.Canonicalize(triple),
+                            triple,
                             compilerLayout.Multilib,
                             compilerLayout.Architecture);
                         var installationIds = new List<string>
@@ -124,7 +123,9 @@ internal static class NativeToolchainResolver
                             installationIds.Add(platformSdk.Owner.Requirement.Id);
                         }
 
-                        var candidate = new ToolchainCandidate(id, installationIds);
+                        var candidate = new ToolchainCandidate(id, installationIds,
+                            owner.Managed && compilerLayout.Multilib is null or "."
+                                && compilerLayout.Architecture == context.Profile.HostArchitecture);
                         context.Candidates.Add(candidate);
                         if (platformSdk is null || platformLayout is null)
                         {
@@ -150,7 +151,6 @@ internal static class NativeToolchainResolver
                                 selectedCompilerSdk,
                                 platform,
                                 compilerLayout.Architecture,
-                                triple,
                                 compilerLayout.Multilib);
                         if (selectedCompilerSdk is null || selectedCompilerLayout is null)
                         {
@@ -177,12 +177,6 @@ internal static class NativeToolchainResolver
                                     StringComparer.Ordinal)
                                 .FirstOrDefault()
                             : null;
-                        if (platform == TargetPlatform.MacOS && auxiliaryToolSet is null)
-                        {
-                            candidate.Invalidate(
-                                "No Xcode ToolSet belongs to the selected Apple platform SDK.");
-                            continue;
-                        }
 
                         Tool? cCompiler = await FindToolAsync(
                             context,
@@ -220,20 +214,11 @@ internal static class NativeToolchainResolver
                                 : [ToolNames.LlvmRanlib, ToolNames.Ranlib],
                             query,
                             cancellationToken).ConfigureAwait(false);
-                        Tool? linker = await FindLinkerAsync(
-                            context,
-                            candidate,
-                            toolSet,
-                            auxiliaryToolSet,
-                            query,
-                            cancellationToken).ConfigureAwait(false);
                         if (!RequireTools(
                             candidate,
                             (cCompiler, "C compiler"),
                             (cppCompiler, "C++ compiler"),
-                            (archiver, "archiver"),
-                            (ranlib, "ranlib"),
-                            (linker, "linker")))
+                            (archiver, "archiver")))
                         {
                             continue;
                         }
@@ -264,7 +249,6 @@ internal static class NativeToolchainResolver
                             CppCompiler = cppCompiler!,
                             Archiver = archiver!,
                             Ranlib = ranlib,
-                            Linker = linker!,
                             Environment = MergeEnvironments(
                                 context, owner.Manifest, platformSdk.Owner.Manifest),
                             ExecutionMode = CanRunNative(
@@ -276,48 +260,12 @@ internal static class NativeToolchainResolver
                                 : ExecutionMode.BuildOnly,
                         };
                         candidate.Decisions.Add(
-                            "The compiler, concrete linker, compiler SDK, and platform SDK were fixed before building.");
+                            "The compiler and SDK inputs were fixed before building; linking uses the selected driver.");
                         candidate.Status = CandidateStatus.Resolved;
                     }
                 }
             }
         }
-    }
-
-    private static Task<Tool?> FindLinkerAsync(
-        AutoTestContext context,
-        ToolchainCandidate candidate,
-        ToolSet toolSet,
-        ToolSet? auxiliaryToolSet,
-        ToolQuery query,
-        CancellationToken cancellationToken)
-    {
-        if (auxiliaryToolSet is not null)
-        {
-            return FindToolAsync(
-                context,
-                candidate,
-                auxiliaryToolSet,
-                ToolNames.Ld,
-                query,
-                cancellationToken);
-        }
-
-        return toolSet.Kind == ToolKind.Gnu
-            ? FindToolAsync(
-                context,
-                candidate,
-                toolSet,
-                ToolNames.Ld,
-                query,
-                cancellationToken)
-            : FindAnyToolAsync(
-                context,
-                candidate,
-                toolSet,
-                [ToolNames.LdLld, ToolNames.Ld],
-                query,
-                cancellationToken);
     }
 
     private static bool IsRequestedLayout(
@@ -337,8 +285,7 @@ internal static class NativeToolchainResolver
             return true;
         }
 
-        return profile.NativeArchitectures.Contains(layout.Architecture)
-            && layout.Multilib is null or ".";
+        return layout.Multilib is null or ".";
     }
 
     private static async Task<SdkOwner?> FindNativePlatformSdkAsync(
@@ -349,42 +296,33 @@ internal static class NativeToolchainResolver
         TargetLayout compilerLayout,
         CancellationToken cancellationToken)
     {
-        InstallationDiscovery? platformOwner = platform == TargetPlatform.MacOS
-            ? Installations(context, InstallationKind.Xcode)
-                .Where(owner => owner.Sdks.Any(sdk => sdk.Kind == SdkKind.Apple))
-                .OrderByDescending(owner => owner.ToolSets
-                    .Select(candidate => candidate.ProductVersion)
-                    .Max())
-                .FirstOrDefault()
-            : compilerOwner;
-        if (platformOwner is null)
+        if (platform == TargetPlatform.MacOS)
         {
-            return null;
+            return OwnedSdks(context, InstallationKind.Xcode, SdkKind.Apple)
+                .Where(item => FindLayout(item.Sdk, platform, compilerLayout.Architecture) is TargetLayout layout
+                    && BuildInputs.AppleSdk(layout))
+                .OrderByDescending(item => item.Sdk.Version)
+                .ThenBy(item => item.Owner.Requirement.Id, StringComparer.Ordinal)
+                .FirstOrDefault();
         }
 
         string? triple = compilerLayout.TargetTriple ?? toolSet.DefaultTargetTriple;
-        bool isApplePlatform = platform == TargetPlatform.MacOS;
-        IReadOnlyDictionary<string, string?> environment = isApplePlatform
-            ? MergeEnvironments(context, compilerOwner.Manifest, platformOwner.Manifest)
-            : context.EnvironmentFor(compilerOwner.Manifest);
         var query = new SdkQuery
         {
-            Kind = isApplePlatform ? SdkKind.Apple : SdkKind.Linux,
-            RootPath = isApplePlatform ? platformOwner.Manifest.RootPath : null,
-            CompilerPath = isApplePlatform ? null : toolSet.CompilerPath,
+            Kind = SdkKind.Linux,
+            RootPath = null,
+            CompilerPath = toolSet.CompilerPath,
             TargetPlatform = platform,
             TargetArchitecture = compilerLayout.Architecture,
-            TargetTriple = isApplePlatform ? null : triple,
-            Multilib = isApplePlatform ? null : compilerLayout.Multilib,
+            TargetTriple = triple,
+            Multilib = compilerLayout.Multilib,
             IncludePreview = true,
-            Environment = environment,
+            Environment = context.EnvironmentFor(compilerOwner.Manifest),
         };
         DiscoveryProbe probe = await DiscoveryStage.RunSdkProbeAsync(
             context,
             $"{compilerOwner.Requirement.Id}/platform/{platform}/{compilerLayout.Architecture}/{compilerLayout.Multilib}",
-            isApplePlatform
-                ? "independent Apple platform SDK from the selected Xcode environment"
-                : "compiler path, target triple, and multilib",
+            "compiler path, target triple, and multilib",
             SdkFinder.CreateDefault(),
             query,
             cancellationToken).ConfigureAwait(false);
@@ -394,10 +332,9 @@ internal static class NativeToolchainResolver
         }
 
         Sdk? sdk = probe.Sdks
-            .Where(candidate => candidate.Kind == query.Kind
-                && BelongsTo(platformOwner.Manifest, candidate))
+            .Where(candidate => candidate.Kind == query.Kind)
             .OrderByDescending(candidate => candidate.Version)
             .FirstOrDefault();
-        return sdk is null ? null : new SdkOwner(platformOwner, sdk);
+        return sdk is null ? null : new SdkOwner(compilerOwner, sdk);
     }
 }

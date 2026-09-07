@@ -21,22 +21,29 @@ internal static class AutoTestReportWriter
     {
         string path = context.Options.ReportPath;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        ToolSet[] toolSets = context.DiscoveryProbes.SelectMany(probe => probe.ToolSets)
+            .Concat(context.Installations.SelectMany(owner => owner.ToolSets))
+            .Concat(context.Candidates.Select(candidate => candidate.Toolchain).OfType<ResolvedToolchain>()
+                .SelectMany(toolchain => toolchain.AuxiliaryToolSet is null
+                    ? new[] { toolchain.ToolSet } : new[] { toolchain.ToolSet, toolchain.AuxiliaryToolSet })).ToArray();
+        Sdk[] sdks = context.DiscoveryProbes.SelectMany(probe => probe.Sdks)
+            .Concat(context.Installations.SelectMany(owner => owner.Sdks))
+            .Concat(context.Candidates.Select(candidate => candidate.Toolchain).OfType<ResolvedToolchain>()
+                .SelectMany(toolchain => toolchain.Sdks.Select(component => component.Sdk))).ToArray();
         object report = new
         {
-            SchemaVersion = 1,
+            SchemaVersion = 2,
             Profile = new
             {
                 context.Profile.Name,
                 context.Profile.Description,
                 context.Profile.RunnerImage,
+                context.Profile.Definition.RequiredHostFamilies,
                 context.Profile.HostOS,
                 context.Profile.HostArchitecture,
                 HostExecutionArchitectures =
                     context.HostCapabilities.Architectures,
-                context.Profile.PipelineStages,
                 context.Profile.ExecutionCapabilities,
-                context.Profile.FailurePolicy,
-                context.Profile.RequiredSdkResources,
                 Installations = context.Profile.Installations.Select(requirement => new
                 {
                     requirement.Id,
@@ -51,7 +58,6 @@ internal static class AutoTestReportWriter
                     context.Profile.TestAllGnuMultilibs,
                     context.Profile.WindowsMsvcArchitectures,
                     context.Profile.WindowsLlvmArchitectures,
-                    context.Profile.UseExistingMsvcTargetsForNonDefaultToolSets,
                     context.Profile.ApplePlatforms,
                     context.Profile.AppleArchitectures,
                     context.Profile.AndroidArchitectures,
@@ -85,28 +91,34 @@ internal static class AutoTestReportWriter
                 probe.Name,
                 probe.Subject,
                 probe.Query,
-                probe.ExpectedFailure,
                 probe.Completed,
                 probe.Succeeded,
                 probe.Error,
-                ToolSets = probe.ToolSets.Select(ToolSetSnapshot),
-                Sdks = probe.Sdks.Select(SdkSnapshot),
+                ToolSets = probe.ToolSets.Select(ToolSetId),
+                Sdks = probe.Sdks.Select(SdkId),
                 Diagnostics = probe.Diagnostics.Select(DiagnosticSnapshot),
             }),
             Installations = context.Installations.Select(installation => new
             {
                 installation.Requirement.Id,
                 installation.Requirement.Kind,
+                Origin = installation.Managed ? "managed" : "preinstalled",
                 ManifestRoot = installation.Manifest.RootPath,
                 installation.Manifest.Version,
                 installation.Succeeded,
                 installation.Decisions,
                 installation.Failures,
-                ToolSets = installation.ToolSets.Select(ToolSetSnapshot),
-                Sdks = installation.Sdks.Select(SdkSnapshot),
+                ToolSets = installation.ToolSets.Select(ToolSetId),
+                Sdks = installation.Sdks.Select(SdkId),
             }),
             Diagnostics = context.Diagnostics.Select(DiagnosticSnapshot),
-            Candidates = context.Candidates.Select(CandidateSnapshot),
+            Snapshots = new
+            {
+                ToolSets = toolSets.DistinctBy(ToolSetId).Select(toolSet => new { Id = ToolSetId(toolSet), Snapshot = ToolSetSnapshot(toolSet) }),
+                Sdks = sdks.DistinctBy(SdkId).Select(sdk => new { Id = SdkId(sdk), Snapshot = SdkSnapshot(sdk) }),
+            },
+            Coverage = context.Coverage.Select(result => new { result.Requirement, result.Passed, result.ScenarioIds, result.Reason }),
+            Scenarios = context.Candidates.Select(CandidateSnapshot),
         };
 
         string temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -162,15 +174,15 @@ internal static class AutoTestReportWriter
             {
                 toolchain.AdapterKind,
                 toolchain.LinkerFlavor,
-                ToolSet = ToolSetSnapshot(toolchain.ToolSet),
+                ToolSetId = ToolSetId(toolchain.ToolSet),
                 AuxiliaryToolSet = toolchain.AuxiliaryToolSet is null
                     ? null
-                    : ToolSetSnapshot(toolchain.AuxiliaryToolSet),
+                    : ToolSetId(toolchain.AuxiliaryToolSet),
                 Sdks = toolchain.Sdks.Select(component => new
                 {
                     component.Role,
-                    Sdk = SdkSnapshot(component.Sdk),
-                    Layout = LayoutSnapshot(component.Layout),
+                    SdkId = SdkId(component.Sdk),
+                    LayoutIndex = component.Sdk.Layouts.ToList().IndexOf(component.Layout),
                 }),
                 toolchain.TargetPlatform,
                 toolchain.TargetArchitecture,
@@ -183,7 +195,7 @@ internal static class AutoTestReportWriter
                 Ranlib = toolchain.Ranlib is null
                     ? null
                     : ToolSnapshot(toolchain.Ranlib),
-                Linker = ToolSnapshot(toolchain.Linker),
+                Linker = toolchain.Linker is null ? null : ToolSnapshot(toolchain.Linker),
                 toolchain.ExecutionMode,
                 toolchain.RuntimePath,
             },
@@ -221,6 +233,12 @@ internal static class AutoTestReportWriter
             result.Error,
         }),
     };
+
+    private static string ToolSetId(ToolSet toolSet) =>
+        "toolset-" + InstallationIdentity.ShortId(JsonSerializer.Serialize(ToolSetSnapshot(toolSet), s_options));
+
+    private static string SdkId(Sdk sdk) =>
+        "sdk-" + InstallationIdentity.ShortId(JsonSerializer.Serialize(SdkSnapshot(sdk), s_options));
 
     private static object ToolSetSnapshot(ToolSet toolSet) => new
     {

@@ -299,6 +299,32 @@ public sealed class FinderTests
         Assert.False(range.Matches(null));
     }
 
+    [Fact]
+    public async Task SameVersionInDifferentInstallationsRemainsIndependentlySelectable()
+    {
+        Finder finder = CreateFinder(new TestToolSet("first"), new TestToolSet("second"));
+        DiscoveryResult result = await finder.FindToolSetsAsync(Query(), TestContext.Current.CancellationToken);
+        Assert.Equal(2, result.ToolSets.Count);
+        foreach (string name in new[] { "first", "second" })
+        {
+            ToolSet? selected = await finder.FindToolSetAsync(Query() with { RootPath = Root(name) },
+                TestContext.Current.CancellationToken);
+            Assert.Equal(Root(name), selected?.RootPath);
+        }
+    }
+
+    [Fact]
+    public async Task RepeatedDiagnosticsAreReportedOnceWithoutHidingOtherProviders()
+    {
+        var diagnostic = new Diagnostic(DiagnosticSeverity.Warning, "partial", "controlled", "Optional tool absent.");
+        var provider = new TestProvider([Kind.Gnu], (_, _, _) =>
+            Task.FromResult(new DiscoveryResult([new TestToolSet("partial")], [diagnostic, diagnostic])));
+        DiscoveryResult result = await new Finder([provider, provider])
+            .FindToolSetsAsync(Query(), TestContext.Current.CancellationToken);
+        Assert.Single(result.ToolSets);
+        Assert.Equal(diagnostic, Assert.Single(result.Diagnostics));
+    }
+
     private static Finder CreateFinder(params ToolSet[] toolSets) => new(
         [new TestProvider(Enum.GetValues<Kind>(), (_, _, _) => Task.FromResult(new DiscoveryResult(toolSets)))]);
 

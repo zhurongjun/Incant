@@ -17,410 +17,229 @@ namespace Incant.AutoTest.CppToolchain;
 
 internal static class WindowsToolchainResolver
 {
-    internal static async Task ResolveAsync(
-        AutoTestContext context,
-        CancellationToken cancellationToken)
+    internal static async Task ResolveAsync(AutoTestContext context, CancellationToken cancellationToken)
     {
-        await ResolveWindowsMsvcAsync(context, cancellationToken).ConfigureAwait(false);
-        await ResolveWindowsLlvmAsync(context, cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task ResolveWindowsMsvcAsync(
-        AutoTestContext context,
-        CancellationToken cancellationToken)
-    {
-        InstallationDiscovery[] visualStudios = Installations(
-            context, InstallationKind.VisualStudio).ToArray();
-        SdkOwner[] windowsSdks = OwnedSdks(context, InstallationKind.WindowsSdk, SdkKind.Windows)
-            .OrderByDescending(item => item.Sdk.Version)
-            .ToArray();
-        if (windowsSdks.Length == 0)
+        TargetArchitecture[] architectures = context.Profile.WindowsMsvcArchitectures
+            .Concat(context.Profile.WindowsLlvmArchitectures)
+            .Concat(OwnedSdks(context, InstallationKind.VisualStudio, SdkKind.Msvc)
+                .SelectMany(item => item.Sdk.Layouts).Select(layout => layout.Architecture))
+            .Where(architecture => architecture != TargetArchitecture.Unknown).Distinct().Order().ToArray();
+        foreach (TargetArchitecture architecture in architectures)
         {
-            return;
-        }
-
-        SdkOwner highestWindowsSdk = windowsSdks[0];
-        var toolSets = new List<ToolSetOwner>();
-        foreach (InstallationDiscovery owner in visualStudios)
-        {
-            toolSets.AddRange(owner.ToolSets
-                .Where(toolSet => toolSet.Kind == ToolKind.VisualStudio)
-                .Select(toolSet => new ToolSetOwner(owner, toolSet)));
-        }
-
-        ToolSetOwner? highestToolSet = toolSets
-            .OrderByDescending(item => item.ToolSet.Version)
-            .FirstOrDefault();
-        if (highestToolSet is null)
-        {
-            return;
-        }
-
-        var compilerSdks =
-            new Dictionary<(ToolSet ToolSet, TargetArchitecture Architecture), Sdk?>();
-        foreach (ToolSetOwner toolSet in toolSets)
-        {
-            Sdk? msvcSdk = FindMsvcSdk(toolSet.ToolSet, toolSet.Owner.Sdks);
-            TargetArchitecture[] architectures =
-                context.Profile.UseExistingMsvcTargetsForNonDefaultToolSets
-                && !ReferenceEquals(toolSet.ToolSet, highestToolSet.ToolSet)
-                && msvcSdk is not null
-                    ? msvcSdk.Layouts
-                        .Where(layout => layout.Platform == TargetPlatform.Windows
-                            && layout.Architecture != TargetArchitecture.Unknown
-                            && IsCompleteLayout(
-                                msvcSdk,
-                                layout,
-                                ResourcePurpose.CppInclude,
-                                ResourcePurpose.Library)
-                            && FindLayout(
-                                highestWindowsSdk.Sdk,
-                                TargetPlatform.Windows,
-                                layout.Architecture) is TargetLayout windowsLayout
-                            && IsCompleteLayout(
-                                highestWindowsSdk.Sdk,
-                                windowsLayout,
-                                ResourcePurpose.CInclude,
-                                ResourcePurpose.Library))
-                        .Select(layout => layout.Architecture)
-                        .Distinct()
-                        .Order()
-                        .ToArray()
-                    : context.Profile.WindowsMsvcArchitectures.ToArray();
-            if (architectures.Length == 0)
+            SdkOwner[] windows = OwnedSdks(context, InstallationKind.WindowsSdk, SdkKind.Windows)
+                .Where(item => FindLayout(item.Sdk, TargetPlatform.Windows, architecture) is TargetLayout layout
+                    && BuildInputs.WindowsSdk(layout))
+                .OrderByDescending(item => item.Sdk.Version)
+                .ThenBy(item => item.Owner.Requirement.Id, StringComparer.Ordinal).ToArray();
+            var inputs = new List<MsvcInputs>();
+            foreach (InstallationDiscovery owner in Installations(context, InstallationKind.VisualStudio))
             {
-                AddInvalid(
-                    context,
-                    CreateId("msvc", toolSet.ToolSet.Version, "no-complete-target"),
-                    [toolSet.Owner.Requirement.Id],
-                    "The compatible MSVC ToolSet has no complete installed target.");
-                continue;
+                foreach (ToolSet toolSet in owner.ToolSets)
+                {
+                    MsvcInputs? input = await PrepareMsvcAsync(context, owner, toolSet, architecture,
+                        cancellationToken).ConfigureAwait(false);
+                    if (input is not null)
+                    {
+                        inputs.Add(input);
+                    }
+                }
             }
 
-            foreach (TargetArchitecture architecture in architectures)
+            MsvcInputs[] complete = inputs.Where(input => input.Compiler is not null
+                && input.Archiver is not null && input.Linker is not null)
+                .OrderByDescending(input => input.ToolSet.Version)
+                .ThenBy(input => input.Owner.Requirement.Id, StringComparer.Ordinal).ToArray();
+            if (windows.Length > 0)
             {
-                await AddWindowsMsvcCandidateAsync(
-                    context,
-                    toolSet,
-                    highestWindowsSdk,
-                    architecture,
-                    compilerSdks,
-                    cancellationToken).ConfigureAwait(false);
+                foreach (MsvcInputs input in complete)
+                {
+                    AddMsvc(context, input, windows[0], architecture);
+                }
+            }
+
+            if (complete.Length > 0)
+            {
+                foreach (SdkOwner sdk in windows)
+                {
+                    AddMsvc(context, complete[0], sdk, architecture);
+                }
+            }
+
+            if (windows.Length > 0)
+            {
+                await AddLlvmAsync(context, inputs, windows[0], architecture, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
-        foreach (SdkOwner windowsSdk in windowsSdks)
+
+        foreach (InstallationDiscovery owner in context.Installations.Where(owner =>
+            owner.Requirement.Kind is InstallationKind.VisualStudio or InstallationKind.WindowsSdk or InstallationKind.Llvm))
         {
-            foreach (TargetArchitecture architecture in context.Profile.WindowsMsvcArchitectures)
+            if (!context.Candidates.Any(candidate => candidate.InstallationIds.Contains(owner.Requirement.Id)))
             {
-                await AddWindowsMsvcCandidateAsync(
-                    context,
-                    highestToolSet,
-                    windowsSdk,
-                    architecture,
-                    compilerSdks,
-                    cancellationToken).ConfigureAwait(false);
+                var candidate = new ToolchainCandidate(owner.Requirement.Id + "-unavailable",
+                    [owner.Requirement.Id], owner.Managed);
+                candidate.Invalidate("No complete Windows library-chain inputs or compatible component pair were found.");
+                context.Candidates.Add(candidate);
             }
         }
     }
 
-    private static async Task AddWindowsMsvcCandidateAsync(
-        AutoTestContext context,
-        ToolSetOwner toolSetOwner,
-        SdkOwner windowsSdkOwner,
-        TargetArchitecture architecture,
-        Dictionary<(ToolSet ToolSet, TargetArchitecture Architecture), Sdk?> compilerSdks,
-        CancellationToken cancellationToken)
+    private static async Task<MsvcInputs?> PrepareMsvcAsync(
+        AutoTestContext context, InstallationDiscovery owner, ToolSet toolSet,
+        TargetArchitecture architecture, CancellationToken cancellationToken)
     {
-        ToolSet toolSet = toolSetOwner.ToolSet;
-        string id = CreateId(
-            "msvc",
-            toolSet.Version,
-            windowsSdkOwner.Sdk.Version,
-            architecture);
+        string id = CreateId("msvc-inputs", owner.Requirement.Id, architecture);
+        var candidate = new ToolchainCandidate(id, [owner.Requirement.Id], owner.Managed);
+        Sdk? sdk = await FindCompilerSdkAsync(context, owner, toolSet, SdkKind.Msvc,
+            TargetPlatform.Windows, architecture, null, null, null, cancellationToken).ConfigureAwait(false);
+        TargetLayout? layout = sdk is null ? null : FindLayout(sdk, TargetPlatform.Windows, architecture);
+        if (sdk is null || layout is null || !BuildInputs.MsvcSdk(layout))
+        {
+            candidate.Invalidate("MSVC headers or runtime libraries used by this target are absent.");
+            context.Candidates.Add(candidate);
+            return null;
+        }
+
+        ToolQuery query = Query(context, TargetPlatform.Windows, architecture);
+        Tool? compiler = await FindToolAsync(context, candidate, toolSet, ToolNames.Cl, query, cancellationToken)
+            .ConfigureAwait(false);
+        Tool? archiver = await FindToolAsync(context, candidate, toolSet, ToolNames.Lib, query, cancellationToken)
+            .ConfigureAwait(false);
+        Tool? linker = await FindToolAsync(context, candidate, toolSet, ToolNames.Link, query, cancellationToken)
+            .ConfigureAwait(false);
+        if (compiler is null || archiver is null || linker is null)
+        {
+            candidate.Invalidate("MSVC cannot run the full library chain; its available SDK can still serve clang-cl.");
+            context.Candidates.Add(candidate);
+        }
+
+        return new MsvcInputs(owner, toolSet, sdk, layout, compiler, archiver, linker);
+    }
+
+    private static void AddMsvc(
+        AutoTestContext context, MsvcInputs input, SdkOwner windows, TargetArchitecture architecture)
+    {
+        string id = CreateId("msvc", input.Owner.Requirement.Id, windows.Owner.Requirement.Id, architecture);
         if (context.Candidates.Any(candidate => candidate.Id == id))
         {
             return;
         }
 
-        var candidate = new ToolchainCandidate(
-            id,
-            [toolSetOwner.Owner.Requirement.Id, windowsSdkOwner.Owner.Requirement.Id]);
-        context.Candidates.Add(candidate);
-        var compilerSdkKey = (toolSet, architecture);
-        if (!compilerSdks.TryGetValue(compilerSdkKey, out Sdk? msvcSdk))
-        {
-            msvcSdk = await FindCompilerSdkAsync(
-                context,
-                toolSetOwner.Owner,
-                toolSet,
-                SdkKind.Msvc,
-                TargetPlatform.Windows,
-                architecture,
-                triple: null,
-                multilib: null,
-                sysrootPath: null,
-                cancellationToken).ConfigureAwait(false);
-            compilerSdks.Add(compilerSdkKey, msvcSdk);
-        }
-
-        if (msvcSdk is null)
-        {
-            candidate.Invalidate("No MSVC development SDK belongs to this ToolSet.");
-            return;
-        }
-
-        TargetLayout? msvcLayout = FindLayout(
-            msvcSdk, TargetPlatform.Windows, architecture);
-        TargetLayout? windowsLayout = FindLayout(
-            windowsSdkOwner.Sdk, TargetPlatform.Windows, architecture);
-        if (msvcLayout is null || windowsLayout is null)
-        {
-            candidate.Invalidate(
-                $"The {architecture} target is not installed completely in this ToolSet/SDK pair.");
-            return;
-        }
-
-        ToolQuery query = Query(context, TargetPlatform.Windows, architecture);
-        Tool? compiler = await FindToolAsync(
-            context,
-            candidate,
-            toolSet,
-            ToolNames.Cl, query, cancellationToken).ConfigureAwait(false);
-        Tool? archiver = await FindToolAsync(
-            context,
-            candidate,
-            toolSet,
-            ToolNames.Lib, query, cancellationToken).ConfigureAwait(false);
-        Tool? linker = await FindToolAsync(
-            context,
-            candidate,
-            toolSet,
-            ToolNames.Link, query, cancellationToken).ConfigureAwait(false);
-        if (!RequireTools(
-            candidate,
-            (compiler, "cl"),
-            (archiver, "lib"),
-            (linker, "link")))
-        {
-            return;
-        }
-
+        var candidate = new ToolchainCandidate(id,
+            [input.Owner.Requirement.Id, windows.Owner.Requirement.Id], input.Owner.Managed || windows.Owner.Managed);
         candidate.Toolchain = new ResolvedToolchain
         {
             Id = id,
             InstallationIds = candidate.InstallationIds,
             AdapterKind = BuildAdapterKind.Msvc,
             LinkerFlavor = LinkerFlavor.Msvc,
-            ToolSet = toolSet,
+            ToolSet = input.ToolSet,
             Sdks =
             [
-                new ResolvedSdkComponent("compiler", msvcSdk, msvcLayout),
-                new ResolvedSdkComponent("platform", windowsSdkOwner.Sdk, windowsLayout),
+                new ResolvedSdkComponent("compiler", input.Sdk, input.Layout),
+                new ResolvedSdkComponent("platform", windows.Sdk,
+                    FindLayout(windows.Sdk, TargetPlatform.Windows, architecture)!),
             ],
             TargetPlatform = TargetPlatform.Windows,
             TargetArchitecture = architecture,
             TargetTriple = WindowsTriple(architecture),
-            CCompiler = compiler!,
-            CppCompiler = compiler!,
-            Archiver = archiver!,
-            Linker = linker!,
-            Environment = MergeEnvironments(
-                context, toolSetOwner.Owner.Manifest, windowsSdkOwner.Owner.Manifest),
+            CCompiler = input.Compiler!,
+            CppCompiler = input.Compiler!,
+            Archiver = input.Archiver!,
+            Linker = input.Linker!,
+            Environment = MergeEnvironments(context, input.Owner.Manifest, windows.Owner.Manifest),
             ExecutionMode = CanRunNative(context, TargetPlatform.Windows, architecture)
-                ? ExecutionMode.Native
-                : ExecutionMode.BuildOnly,
+                ? ExecutionMode.Native : ExecutionMode.BuildOnly,
         };
-        candidate.Decisions.Add(
-            "Paired one concrete MSVC ToolSet with the selected Windows SDK before building.");
         candidate.Status = CandidateStatus.Resolved;
+        candidate.Decisions.Add("Selected the highest available complete companion before building.");
+        context.Candidates.Add(candidate);
     }
 
-    private static bool IsCompleteLayout(
-        Sdk sdk,
-        TargetLayout layout,
-        params ResourcePurpose[] requiredResources) =>
-        !sdk.Diagnostics.Concat(layout.Diagnostics).Any(
-            diagnostic => diagnostic.Severity == DiagnosticSeverity.Error
-                || diagnostic.Code == "missing-resource")
-        && requiredResources.All(required => layout.Resources.Any(
-            resource => resource.Purpose == required));
-
-    private static async Task ResolveWindowsLlvmAsync(
-        AutoTestContext context,
-        CancellationToken cancellationToken)
+    private static async Task AddLlvmAsync(
+        AutoTestContext context, IReadOnlyList<MsvcInputs> msvcInputs, SdkOwner windows,
+        TargetArchitecture architecture, CancellationToken cancellationToken)
     {
-        ToolSetOwner? msvcToolSet = Installations(context, InstallationKind.VisualStudio)
-            .SelectMany(owner => owner.ToolSets
-                .Where(toolSet => toolSet.Kind == ToolKind.VisualStudio)
-                .Select(toolSet => new ToolSetOwner(owner, toolSet)))
-            .OrderByDescending(item => item.ToolSet.Version)
-            .FirstOrDefault();
-        SdkOwner? windowsSdk = OwnedSdks(
-                context, InstallationKind.WindowsSdk, SdkKind.Windows)
-            .OrderByDescending(item => item.Sdk.Version)
-            .FirstOrDefault();
-        if (msvcToolSet is null || windowsSdk is null)
+        foreach (InstallationDiscovery owner in Installations(context, InstallationKind.Llvm))
         {
-            return;
-        }
-
-        if (FindMsvcSdk(msvcToolSet.ToolSet, msvcToolSet.Owner.Sdks) is null)
-        {
-            return;
-        }
-
-        var msvcSdks = new Dictionary<TargetArchitecture, Sdk?>();
-        foreach (InstallationDiscovery llvmOwner in Installations(
-            context, InstallationKind.Llvm))
-        {
-            foreach (ToolSet llvmToolSet in llvmOwner.ToolSets
-                .Where(toolSet => toolSet.Kind == ToolKind.Llvm))
+            foreach (ToolSet toolSet in owner.ToolSets)
             {
-                foreach (TargetArchitecture architecture in
-                    context.Profile.WindowsLlvmArchitectures)
+                foreach (LinkerFlavor flavor in new[] { LinkerFlavor.Msvc, LinkerFlavor.Lld })
                 {
+                    MsvcInputs? msvc = msvcInputs.Where(input => flavor != LinkerFlavor.Msvc || input.Linker is not null)
+                        .OrderByDescending(input => input.ToolSet.Version)
+                        .ThenBy(input => input.Owner.Requirement.Id, StringComparer.Ordinal).FirstOrDefault();
+                    string id = CreateId("clang-cl", owner.Requirement.Id,
+                        msvc?.Owner.Requirement.Id, windows.Owner.Requirement.Id, architecture, flavor);
+                    var candidate = new ToolchainCandidate(id,
+                        new[] { owner.Requirement.Id, windows.Owner.Requirement.Id }
+                            .Concat(msvc is null ? [] : new[] { msvc.Owner.Requirement.Id }), owner.Managed);
+                    context.Candidates.Add(candidate);
+                    if (msvc is null)
+                    {
+                        candidate.Invalidate("No usable MSVC runtime environment matches this linker scenario.");
+                        continue;
+                    }
+
                     string triple = WindowsTriple(architecture);
-                    if (!msvcSdks.TryGetValue(architecture, out Sdk? msvcSdk))
+                    Sdk? compilerSdk = await FindCompilerSdkAsync(context, owner, toolSet, SdkKind.Llvm,
+                        TargetPlatform.Windows, architecture, triple, null, null, cancellationToken).ConfigureAwait(false);
+                    TargetLayout? compilerLayout = compilerSdk is null ? null
+                        : FindLayout(compilerSdk, TargetPlatform.Windows, architecture);
+                    if (compilerSdk is null || compilerLayout is null)
                     {
-                        msvcSdk = await FindCompilerSdkAsync(
-                            context,
-                            msvcToolSet.Owner,
-                            msvcToolSet.ToolSet,
-                            SdkKind.Msvc,
-                            TargetPlatform.Windows,
-                            architecture,
-                            triple: null,
-                            multilib: null,
-                            sysrootPath: null,
-                            cancellationToken).ConfigureAwait(false);
-                        msvcSdks.Add(architecture, msvcSdk);
+                        candidate.Invalidate("No compiler SDK confirms this Windows target.");
+                        continue;
                     }
 
-                    Sdk? llvmSdk = await FindCompilerSdkAsync(
-                        context,
-                        llvmOwner,
-                        llvmToolSet,
-                        SdkKind.Llvm,
-                        TargetPlatform.Windows,
-                        architecture,
-                        triple,
-                        multilib: null,
-                        sysrootPath: null,
-                        cancellationToken).ConfigureAwait(false);
-                    TargetLayout? llvmLayout = llvmSdk is null
-                        ? null
-                        : FindLayout(
-                            llvmSdk, TargetPlatform.Windows, architecture, triple);
-                    TargetLayout? msvcLayout = msvcSdk is null
-                        ? null
-                        : FindLayout(
-                            msvcSdk, TargetPlatform.Windows, architecture);
-                    TargetLayout? windowsLayout = FindLayout(
-                        windowsSdk.Sdk, TargetPlatform.Windows, architecture);
-
-                    foreach (LinkerFlavor flavor in new[]
+                    ToolQuery query = Query(context, TargetPlatform.Windows, architecture);
+                    Tool? compiler = await FindToolAsync(context, candidate, toolSet, ToolNames.ClangCl,
+                        query, cancellationToken).ConfigureAwait(false);
+                    Tool? archiver = await FindAnyToolAsync(context, candidate, toolSet,
+                        [ToolNames.LlvmLib, ToolNames.LlvmAr], query, cancellationToken).ConfigureAwait(false);
+                    Tool? linker = flavor == LinkerFlavor.Msvc ? msvc.Linker
+                        : await FindToolAsync(context, candidate, toolSet, ToolNames.LldLink, query, cancellationToken)
+                            .ConfigureAwait(false);
+                    if (!RequireTools(candidate, (compiler, "clang-cl"), (archiver, "archiver"), (linker, "explicit linker")))
                     {
-                        LinkerFlavor.Msvc,
-                        LinkerFlavor.Lld,
-                    })
-                    {
-                        string id = CreateId(
-                            "clang-cl-" + flavor.ToString().ToLowerInvariant(),
-                            llvmToolSet.CompilerVersion,
-                            windowsSdk.Sdk.Version,
-                            architecture);
-                        var candidate = new ToolchainCandidate(
-                            id,
-                            [
-                                llvmOwner.Requirement.Id,
-                                msvcToolSet.Owner.Requirement.Id,
-                                windowsSdk.Owner.Requirement.Id,
-                            ]);
-                        context.Candidates.Add(candidate);
-                        if (llvmSdk is null
-                            || llvmLayout is null
-                            || msvcSdk is null
-                            || msvcLayout is null
-                            || windowsLayout is null)
-                        {
-                            candidate.Invalidate(
-                                "LLVM, MSVC, and Windows SDK layouts could not be resolved for this target.");
-                            continue;
-                        }
-
-                        ToolQuery query = Query(
-                            context, TargetPlatform.Windows, architecture);
-                        Tool? compiler = await FindToolAsync(
-                            context,
-                            candidate,
-                            llvmToolSet,
-                            ToolNames.ClangCl, query, cancellationToken).ConfigureAwait(false);
-                        Tool? archiver = await FindAnyToolAsync(
-                            context,
-                            candidate,
-                            llvmToolSet,
-                            [ToolNames.LlvmLib, ToolNames.LlvmAr],
-                            query,
-                            cancellationToken).ConfigureAwait(false);
-                        Tool? linker = flavor == LinkerFlavor.Msvc
-                            ? await FindToolAsync(
-                                context,
-                                candidate,
-                                msvcToolSet.ToolSet,
-                                ToolNames.Link, query, cancellationToken).ConfigureAwait(false)
-                            : await FindToolAsync(
-                                context,
-                                candidate,
-                                llvmToolSet,
-                                ToolNames.LldLink, query, cancellationToken).ConfigureAwait(false);
-                        if (!RequireTools(
-                            candidate,
-                            (compiler, "clang-cl"),
-                            (archiver, "llvm-lib/llvm-ar"),
-                            (linker, flavor == LinkerFlavor.Msvc
-                                ? "link"
-                                : "lld-link")))
-                        {
-                            continue;
-                        }
-
-                        candidate.Toolchain = new ResolvedToolchain
-                        {
-                            Id = id,
-                            InstallationIds = candidate.InstallationIds,
-                            AdapterKind = BuildAdapterKind.ClangCl,
-                            LinkerFlavor = flavor,
-                            ToolSet = llvmToolSet,
-                            AuxiliaryToolSet = msvcToolSet.ToolSet,
-                            Sdks =
-                            [
-                                new ResolvedSdkComponent("compiler", llvmSdk, llvmLayout),
-                                new ResolvedSdkComponent("msvc", msvcSdk, msvcLayout),
-                                new ResolvedSdkComponent("platform", windowsSdk.Sdk, windowsLayout),
-                            ],
-                            TargetPlatform = TargetPlatform.Windows,
-                            TargetArchitecture = architecture,
-                            TargetTriple = triple,
-                            CCompiler = compiler!,
-                            CppCompiler = compiler!,
-                            Archiver = archiver!,
-                            Linker = linker!,
-                            Environment = MergeEnvironments(
-                                context,
-                                llvmOwner.Manifest,
-                                msvcToolSet.Owner.Manifest,
-                                windowsSdk.Owner.Manifest),
-                            ExecutionMode = CanRunNative(
-                                context, TargetPlatform.Windows, architecture)
-                                ? ExecutionMode.Native
-                                : ExecutionMode.BuildOnly,
-                        };
-                        candidate.Decisions.Add(
-                            $"clang-cl was fixed to the {flavor} linker before compilation.");
-                        candidate.Status = CandidateStatus.Resolved;
+                        continue;
                     }
+
+                    candidate.Toolchain = new ResolvedToolchain
+                    {
+                        Id = id,
+                        InstallationIds = candidate.InstallationIds,
+                        AdapterKind = BuildAdapterKind.ClangCl,
+                        LinkerFlavor = flavor,
+                        ToolSet = toolSet,
+                        AuxiliaryToolSet = msvc.ToolSet,
+                        Sdks =
+                        [
+                            new ResolvedSdkComponent("compiler", compilerSdk, compilerLayout),
+                            new ResolvedSdkComponent("msvc", msvc.Sdk, msvc.Layout),
+                            new ResolvedSdkComponent("platform", windows.Sdk,
+                                FindLayout(windows.Sdk, TargetPlatform.Windows, architecture)!),
+                        ],
+                        TargetPlatform = TargetPlatform.Windows,
+                        TargetArchitecture = architecture,
+                        TargetTriple = triple,
+                        CCompiler = compiler!,
+                        CppCompiler = compiler!,
+                        Archiver = archiver!,
+                        Linker = linker!,
+                        Environment = MergeEnvironments(context, owner.Manifest, msvc.Owner.Manifest, windows.Owner.Manifest),
+                        ExecutionMode = CanRunNative(context, TargetPlatform.Windows, architecture)
+                            ? ExecutionMode.Native : ExecutionMode.BuildOnly,
+                    };
+                    candidate.Decisions.Add($"The {flavor} linker is executed explicitly; inputs were fixed before compilation.");
+                    candidate.Status = CandidateStatus.Resolved;
                 }
             }
         }
     }
+
+    private sealed record MsvcInputs(
+        InstallationDiscovery Owner, ToolSet ToolSet, Sdk Sdk, TargetLayout Layout,
+        Tool? Compiler, Tool? Archiver, Tool? Linker);
 }

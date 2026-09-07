@@ -6,22 +6,11 @@ internal static class HostToolchainComponents
 {
     internal static IReadOnlyList<ISetupComponent> Create(EnvironmentDefinition profile)
     {
-        if (profile.HostOS == Incant.Base.PlatformOS.Windows)
-        {
-            return profile.Installations
-                .Where(requirement => requirement.Kind is
-                    InstallationKind.VisualStudio or
-                    InstallationKind.WindowsSdk or
-                    InstallationKind.Llvm)
-                .Select(CreateWindowsComponent)
-                .ToArray();
-        }
-
         if (profile.HostOS == Incant.Base.PlatformOS.Linux)
         {
             return
             [
-                new UbuntuPackagesComponent(),
+                new UbuntuPackagesComponent(profile.Installations),
                 .. profile.Installations
                     .Where(requirement => requirement.Kind is
                         InstallationKind.Gnu or InstallationKind.Llvm)
@@ -29,25 +18,13 @@ internal static class HostToolchainComponents
             ];
         }
 
-        if (profile.HostOS == Incant.Base.PlatformOS.OSX)
-        {
-            return profile.Installations
-                .Where(requirement => requirement.Kind is
-                    InstallationKind.Xcode or
-                    InstallationKind.Gnu or
-                    InstallationKind.Llvm)
-                .Select(CreateMacComponent)
-                .ToArray();
-        }
-
-        throw new SetupConfigurationException(
-            $"No host provisioning plan is defined for '{profile.Name}'.");
+        return [];
     }
 
     private static ISetupComponent CreateLinuxCompilerComponent(
         InstallationRequirement requirement)
     {
-        if (requirement.Id == "linuxbrew-llvm-18")
+        if (requirement.Provisioning == ProvisioningMethod.Linuxbrew)
         {
             return new LinuxbrewLlvmComponent(requirement);
         }
@@ -62,49 +39,6 @@ internal static class HostToolchainComponents
                 ? [$"g++-{major}"]
                 : [$"clang++-{major}"],
             dependencies: ["ubuntu-packages"]);
-    }
-
-    private static ISetupComponent CreateWindowsComponent(
-        InstallationRequirement requirement) => requirement.Kind switch
-        {
-            InstallationKind.VisualStudio => new VisualStudioInventoryComponent(
-                requirement.Id,
-                HostToolchainUtilities.Major(requirement)),
-            InstallationKind.WindowsSdk => new WindowsSdkInventoryComponent(
-                requirement.Id,
-                requirement.SdkVersion?.Value
-                    ?? throw new SetupConfigurationException(
-                        $"Windows SDK requirement '{requirement.Id}' has no SDK version.")),
-            InstallationKind.Llvm => new WindowsLlvmInventoryComponent(
-                requirement.Id,
-                HostToolchainUtilities.Major(requirement)),
-            _ => throw new ArgumentOutOfRangeException(nameof(requirement), requirement.Kind, null),
-        };
-
-    private static ISetupComponent CreateMacComponent(
-        InstallationRequirement requirement) => requirement.Kind switch
-        {
-            InstallationKind.Xcode => new XcodeInventoryComponent(
-                requirement.Id,
-                requirement.SdkVersion?.Value
-                    ?? throw new SetupConfigurationException(
-                        $"Xcode requirement '{requirement.Id}' has no product version.")),
-            InstallationKind.Gnu => CreateMacGnuComponent(requirement),
-            InstallationKind.Llvm => new MacLlvmInventoryComponent(
-                requirement.Id,
-                HostToolchainUtilities.Major(requirement)),
-            _ => throw new ArgumentOutOfRangeException(nameof(requirement), requirement.Kind, null),
-        };
-
-    private static ISetupComponent CreateMacGnuComponent(
-        InstallationRequirement requirement)
-    {
-        int major = HostToolchainUtilities.Major(requirement);
-        return new CompilerInventoryComponent(
-            requirement,
-            [$"/opt/homebrew/bin/gcc-{major}", $"gcc-{major}"],
-            [$"/opt/homebrew/bin/g++-{major}", $"g++-{major}"],
-            dependencies: []);
     }
 }
 

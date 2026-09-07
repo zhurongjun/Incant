@@ -472,6 +472,22 @@ public sealed class FinderTests
         Assert.Equal(new Version(26, 0), sdk.Layouts[0].DefaultDeploymentVersion);
     }
 
+    [Fact]
+    public async Task SameVersionInDifferentRootsRemainsIndependentlySelectable()
+    {
+        Finder finder = CreateFinder(
+            CreateSdk("first", version: new Version(1, 0)),
+            CreateSdk("second", version: new Version(1, 0)));
+        DiscoveryResult result = await finder.FindSdksAsync(Query(), TestContext.Current.CancellationToken);
+        Assert.Equal(2, result.Sdks.Count);
+        foreach (string name in new[] { "first", "second" })
+        {
+            Sdk? selected = await finder.FindSdkAsync(Query() with { RootPath = Root(name) },
+                TestContext.Current.CancellationToken);
+            Assert.Equal(Root(name), selected?.RootPath);
+        }
+    }
+
     private static string CreateMsvcInstallation(
         string root,
         params TargetArchitecture[] architectures)

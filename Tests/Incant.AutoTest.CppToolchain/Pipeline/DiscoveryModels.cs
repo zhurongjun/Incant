@@ -18,11 +18,9 @@ internal sealed class DiscoveryProbe
 
     internal required string Query { get; init; }
 
-    internal bool ExpectedFailure { get; init; }
-
     internal bool Succeeded { get; set; }
 
-    internal bool Completed => Error is null;
+    internal bool Completed => Succeeded || Error is not null;
 
     internal string? Error { get; set; }
 
@@ -35,8 +33,11 @@ internal sealed class DiscoveryProbe
 
 internal sealed class InstallationDiscovery(
     InstallationRequirement requirement,
-    InstallationManifest manifest)
+    InstallationManifest manifest,
+    bool managed = true)
 {
+    internal bool Managed { get; } = managed;
+
     internal InstallationRequirement Requirement { get; } = requirement;
 
     internal InstallationManifest Manifest { get; } = manifest;

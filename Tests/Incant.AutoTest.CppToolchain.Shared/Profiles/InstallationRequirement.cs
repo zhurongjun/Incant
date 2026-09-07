@@ -101,4 +101,11 @@ internal sealed record InstallationRequirement(
     InstallationKind Kind,
     VersionRule? ToolVersion,
     VersionRule? SdkVersion,
-    bool Required = true);
+    bool Required = true,
+    ProvisioningMethod Provisioning = ProvisioningMethod.Default);
+
+internal enum ProvisioningMethod
+{
+    Default,
+    Linuxbrew,
+}

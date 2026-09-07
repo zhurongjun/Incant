@@ -65,7 +65,11 @@ internal static class BundleToolchainResolver
             if (owner.Requirement.Kind == InstallationKind.AndroidNdk)
             {
                 foreach (TargetArchitecture architecture in
-                    context.Profile.AndroidArchitectures)
+                    context.Profile.AndroidArchitectures.Concat(sdk.Layouts
+                        .Where(layout => layout.Platform == TargetPlatform.Android)
+                        .Select(layout => layout.Architecture))
+                        .Where(architecture => architecture != TargetArchitecture.Unknown)
+                        .Distinct())
                 {
                     await AddBundleCandidateAsync(
                         context,
@@ -136,14 +140,16 @@ internal static class BundleToolchainResolver
         string? discriminator = multilib
             ?? androidApi?.ToString(System.Globalization.CultureInfo.InvariantCulture)
             ?? (platform == TargetPlatform.Wasi
-                ? TargetTripleIdentity.Canonicalize(targetTriple ?? string.Empty)
+                ? targetTriple ?? string.Empty
                 : null);
         string id = CreateId(
             owner.Requirement.Id,
             platform,
             architecture,
             discriminator);
-        var candidate = new ToolchainCandidate(id, [owner.Requirement.Id]);
+        var candidate = new ToolchainCandidate(id, [owner.Requirement.Id],
+            owner.Managed && (platform != TargetPlatform.Android
+                || context.Profile.AndroidArchitectures.Contains(architecture)));
         context.Candidates.Add(candidate);
 
         var sdkQuery = new SdkQuery
@@ -180,7 +186,7 @@ internal static class BundleToolchainResolver
             .FirstOrDefault();
         TargetLayout? layout = sdk is null
             ? null
-            : FindLayout(sdk, platform, architecture, targetTriple, multilib);
+            : FindLayout(sdk, platform, architecture, multilib);
         if (sdk is null || layout is null)
         {
             candidate.Invalidate(
@@ -210,6 +216,7 @@ internal static class BundleToolchainResolver
             candidate.Invalidate("The bundle target triple is unknown.");
             return;
         }
+
         ToolQuery query = Query(
             context,
             platform,
@@ -234,13 +241,6 @@ internal static class BundleToolchainResolver
             BuildAdapterKind.Emscripten => [ToolNames.Emranlib],
             _ => [ToolNames.LlvmRanlib, ToolNames.Ranlib],
         };
-        string[] linkerNames = adapter switch
-        {
-            BuildAdapterKind.Android => [ToolNames.LdLld],
-            BuildAdapterKind.Emscripten or BuildAdapterKind.Wasi =>
-                [ToolNames.WasmLd],
-            _ => throw new ArgumentOutOfRangeException(nameof(adapter), adapter, null),
-        };
         Tool? cCompiler = await FindAnyToolAsync(
             context,
             candidate,
@@ -257,17 +257,11 @@ internal static class BundleToolchainResolver
             context,
             candidate,
             toolSet, ranlibNames, query, cancellationToken).ConfigureAwait(false);
-        Tool? linker = await FindAnyToolAsync(
-            context,
-            candidate,
-            toolSet, linkerNames, query, cancellationToken).ConfigureAwait(false);
         if (!RequireTools(
             candidate,
             (cCompiler, cNames[0]),
             (cppCompiler, cppNames[0]),
-            (archiver, archiveNames[0]),
-            (ranlib, ranlibNames[0]),
-            (linker, linkerNames[0])))
+            (archiver, archiveNames[0])))
         {
             return;
         }
@@ -295,7 +289,7 @@ internal static class BundleToolchainResolver
             _ => null,
         };
         if (executionMode is ExecutionMode.Node or ExecutionMode.Wasmtime
-            && runtime is null)
+            && (runtime is null || !File.Exists(runtime.Path)))
         {
             candidate.Invalidate($"The required {executionMode} runtime is absent.");
             return;
@@ -318,7 +312,6 @@ internal static class BundleToolchainResolver
             CppCompiler = cppCompiler!,
             Archiver = archiver!,
             Ranlib = ranlib,
-            Linker = linker!,
             Environment = context.EnvironmentFor(owner.Manifest),
             ExecutionMode = executionMode,
             RuntimePath = runtime?.Path,
@@ -340,16 +333,10 @@ internal static class BundleToolchainResolver
     private static bool BelongsTo(
         InstallationDiscovery owner,
         ToolSet toolSet) =>
-        Related(owner.Manifest.RootPath, toolSet.RootPath)
-        || Related(owner.Manifest.RootPath, toolSet.EnvironmentPath)
-        || toolSet.CompilerPath is not null
-            && Related(owner.Manifest.RootPath, toolSet.CompilerPath);
+        ToolchainResolution.BelongsTo(owner.Manifest, toolSet);
 
     private static bool BelongsTo(
         InstallationDiscovery owner,
         Sdk sdk) =>
-        Related(owner.Manifest.RootPath, sdk.RootPath)
-        || Related(owner.Manifest.RootPath, sdk.EnvironmentPath)
-        || sdk.CompilerPath is not null
-            && Related(owner.Manifest.RootPath, sdk.CompilerPath);
+        ToolchainResolution.BelongsTo(owner.Manifest, sdk);
 }

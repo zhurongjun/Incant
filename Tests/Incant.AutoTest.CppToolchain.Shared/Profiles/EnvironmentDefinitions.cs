@@ -23,16 +23,8 @@ internal static class EnvironmentDefinitions
         HostOS = PlatformOS.Windows,
         HostArchitecture = TargetArchitecture.X64,
         RunnerImage = "windows-2022",
-        Installations =
-        [
-            ProductMajor("vs2022", InstallationKind.VisualStudio, 17),
-            ExactSdk("windows-sdk-17763", InstallationKind.WindowsSdk, "10.0.17763.0"),
-            ExactSdk("windows-sdk-19041", InstallationKind.WindowsSdk, "10.0.19041.0"),
-            ExactSdk("windows-sdk-22621", InstallationKind.WindowsSdk, "10.0.22621.0"),
-            ExactSdk("windows-sdk-26100", InstallationKind.WindowsSdk, "10.0.26100.0"),
-            CompilerMajor("llvm-20", InstallationKind.Llvm, 20),
-            .. s_crossPlatformInstallations,
-        ],
+        RequiredHostFamilies = [InstallationKind.VisualStudio, InstallationKind.WindowsSdk, InstallationKind.Llvm],
+        Installations = s_crossPlatformInstallations,
     };
 
     internal static EnvironmentDefinition WindowsVs2026 { get; } = new()
@@ -42,12 +34,8 @@ internal static class EnvironmentDefinitions
         HostOS = PlatformOS.Windows,
         HostArchitecture = TargetArchitecture.X64,
         RunnerImage = "windows-2025-vs2026",
-        Installations =
-        [
-            ProductMajor("vs2026", InstallationKind.VisualStudio, 18),
-            ExactSdk("windows-sdk-26100", InstallationKind.WindowsSdk, "10.0.26100.0"),
-            CompilerMajor("llvm-20", InstallationKind.Llvm, 20),
-        ],
+        RequiredHostFamilies = [InstallationKind.VisualStudio, InstallationKind.WindowsSdk, InstallationKind.Llvm],
+        Installations = [],
     };
 
     internal static EnvironmentDefinition Ubuntu2404 { get; } = new()
@@ -57,6 +45,7 @@ internal static class EnvironmentDefinitions
         HostOS = PlatformOS.Linux,
         HostArchitecture = TargetArchitecture.X64,
         RunnerImage = "ubuntu-24.04",
+        RequiredHostFamilies = [InstallationKind.Gnu, InstallationKind.Llvm],
         Installations =
         [
             CompilerMajor("gcc-12", InstallationKind.Gnu, 12),
@@ -68,7 +57,7 @@ internal static class EnvironmentDefinitions
             CompilerExact(
                 "linuxbrew-llvm-18",
                 InstallationKind.Llvm,
-                "18.1.8"),
+                "18.1.8") with { Provisioning = ProvisioningMethod.Linuxbrew },
             .. s_crossPlatformInstallations,
         ],
     };
@@ -80,14 +69,8 @@ internal static class EnvironmentDefinitions
         HostOS = PlatformOS.OSX,
         HostArchitecture = TargetArchitecture.ARM64,
         RunnerImage = "macos-15",
-        Installations =
-        [
-            ProductMinor("xcode-16.4", InstallationKind.Xcode, "16.4"),
-            ProductMinor("xcode-26.3", InstallationKind.Xcode, "26.3"),
-            CompilerMajor("gcc-14", InstallationKind.Gnu, 14),
-            CompilerMajor("llvm-18", InstallationKind.Llvm, 18),
-            .. s_crossPlatformInstallations,
-        ],
+        RequiredHostFamilies = [InstallationKind.Xcode, InstallationKind.Gnu, InstallationKind.Llvm],
+        Installations = s_crossPlatformInstallations,
     };
 
     internal static IReadOnlyList<EnvironmentDefinition> All { get; } =
@@ -103,9 +86,6 @@ internal static class EnvironmentDefinitions
         var rule = new VersionRule(version, VersionSource.Version, VersionPrecision.Exact);
         return new InstallationRequirement(id, kind, rule, rule);
     }
-
-    private static InstallationRequirement ExactSdk(string id, InstallationKind kind, string version) =>
-        new(id, kind, null, new VersionRule(version, VersionSource.Version, VersionPrecision.Exact));
 
     private static InstallationRequirement CompilerExact(
         string id,
@@ -130,20 +110,5 @@ internal static class EnvironmentDefinitions
             kind,
             new VersionRule(value, VersionSource.CompilerVersion, VersionPrecision.Major),
             new VersionRule(value, VersionSource.Version, VersionPrecision.Major));
-    }
-
-    private static InstallationRequirement ProductMajor(string id, InstallationKind kind, int major)
-    {
-        var rule = new VersionRule(
-            major.ToString(CultureInfo.InvariantCulture),
-            VersionSource.ProductVersion,
-            VersionPrecision.Major);
-        return new InstallationRequirement(id, kind, rule, rule);
-    }
-
-    private static InstallationRequirement ProductMinor(string id, InstallationKind kind, string version)
-    {
-        var rule = new VersionRule(version, VersionSource.ProductVersion, VersionPrecision.Minor);
-        return new InstallationRequirement(id, kind, rule, rule);
     }
 }

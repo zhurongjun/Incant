@@ -420,6 +420,56 @@ public sealed class CompilerProviderTests
         Assert.Equal(wrapper, cppCompiler?.Path);
     }
 
+    [Theory]
+    [InlineData("x86_64-vendor-linux-gnu-clang-18.1", "x86_64-vendor-linux-gnu-clang++-18.1")]
+    [InlineData("clang18.1", "clang++18.1")]
+    [InlineData("cc-18.1", "c++-18.1")]
+    public async Task DirectoryDiscoveryAndCompanionLookupShareVersionedDriverNames(string cName, string cppName)
+    {
+        RequireUnix();
+        using var installation = new SyntheticInstallation();
+        string bin = installation.Directory("slot/bin");
+        string compiler = installation.Compiler("slot/bin/" + cName, CompilerIdentity.Llvm, "18.1.8");
+        string cpp = installation.Compiler("slot/bin/" + cppName, CompilerIdentity.Llvm, "18.1.8");
+
+        ToolSet toolSet = await FindToolSetAsync(bin, ToolKind.Llvm);
+        Tool? companion = await toolSet.FindToolAsync(ToolNames.Clangxx,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Incant.Core.Cpp.FindSdk.Sdk? sdk = await new SdkFinder([new SdkCompilerProvider()])
+            .FindSdkAsync(new SdkQuery
+            {
+                Kind = SdkKind.Llvm,
+                RootPath = bin,
+                Environment = Environment(),
+            }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(compiler, toolSet.CompilerPath);
+        Assert.Equal(cpp, companion?.Path);
+        Assert.Equal(compiler, sdk?.CompilerPath);
+    }
+
+    [Fact]
+    public async Task CompilerFamilyComesFromTheDriverRatherThanItsInvocationName()
+    {
+        RequireUnix();
+        using var installation = new SyntheticInstallation();
+        string compiler = installation.Compiler("slot/bin/gcc-18", CompilerIdentity.Llvm, "18.1.8");
+        ToolSet toolSet = await FindToolSetAsync(compiler, ToolKind.Llvm);
+        Incant.Core.Cpp.FindSdk.Sdk? sdk = await new SdkFinder([new SdkCompilerProvider()])
+            .FindSdkAsync(new SdkQuery
+            {
+                Kind = SdkKind.Llvm,
+                CompilerPath = compiler,
+                Environment = Environment(),
+            }, TestContext.Current.CancellationToken);
+        Tool? cCompiler = await toolSet.FindToolAsync(ToolNames.Clang,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(compiler, cCompiler?.Path);
+        Assert.Equal(ToolKind.Llvm, toolSet.Kind);
+        Assert.Equal(SdkKind.Llvm, sdk?.Kind);
+        Assert.Equal(toolSet.CompilerVersion, sdk?.Version);
+    }
+
     private static async Task<ToolSet> FindToolSetAsync(
         string root,
         ToolKind kind,

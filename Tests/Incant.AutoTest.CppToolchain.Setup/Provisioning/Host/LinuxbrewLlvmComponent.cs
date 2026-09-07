@@ -8,11 +8,13 @@ internal sealed class LinuxbrewLlvmComponent(
     InstallationRequirement requirement)
     : ISetupComponent
 {
-    private const string Formula = "llvm@18";
+    private int Major => HostToolchainUtilities.Major(requirement);
+
+    private string Formula => $"llvm@{Major}";
 
     public string Id => requirement.Id;
 
-    public string Name => "Linuxbrew LLVM 18";
+    public string Name => $"Linuxbrew LLVM {Major}";
 
     public IReadOnlyList<string> Dependencies => [];
 
@@ -64,8 +66,8 @@ internal sealed class LinuxbrewLlvmComponent(
 
         string bin = Path.Combine(root, "bin");
         string clang = RequireInvocationFile(
-            Path.Combine(bin, "clang-18"),
-            "Linuxbrew clang-18");
+            Path.Combine(bin, $"clang-{Major}"),
+            $"Linuxbrew clang-{Major}");
         string clangxx = RequireInvocationFile(
             Path.Combine(bin, "clang++"),
             "Linuxbrew clang++");
@@ -113,7 +115,7 @@ internal sealed class LinuxbrewLlvmComponent(
             HostToolchainUtilities.RequireMajor(
                 path,
                 toolVersion,
-                18);
+                Major);
         }
 
         SetupCommandOutput information =
@@ -211,7 +213,7 @@ internal sealed class LinuxbrewLlvmComponent(
                 $"{description} command returned no output.");
     }
 
-    private static string FormulaRevision(string json)
+    private string FormulaRevision(string json)
     {
         using JsonDocument document = JsonDocument.Parse(json);
         JsonElement formulae =

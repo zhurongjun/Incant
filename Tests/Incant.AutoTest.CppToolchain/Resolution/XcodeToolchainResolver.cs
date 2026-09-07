@@ -26,7 +26,13 @@ internal static class XcodeToolchainResolver
                 foreach (TargetPlatform platform in context.Profile.ApplePlatforms)
                 {
                     foreach (TargetArchitecture architecture in
-                        context.Profile.AppleArchitectures)
+                        context.Profile.AppleArchitectures.Concat(owner.Sdks
+                            .Where(sdk => sdk.Kind == SdkKind.Apple)
+                            .SelectMany(sdk => sdk.Layouts)
+                            .Where(layout => layout.Platform == platform)
+                            .Select(layout => layout.Architecture))
+                            .Where(architecture => architecture is TargetArchitecture.ARM64 or TargetArchitecture.X64)
+                            .Distinct())
                     {
                         await ResolveTargetAsync(
                             context,
@@ -55,14 +61,14 @@ internal static class XcodeToolchainResolver
             toolSet.ProductVersion,
             platform,
             architecture);
-        var candidate = new ToolchainCandidate(id, [owner.Requirement.Id]);
+        var candidate = new ToolchainCandidate(id, [owner.Requirement.Id], owner.Managed);
         context.Candidates.Add(candidate);
 
         Sdk? platformSdk = owner.Sdks
             .Where(sdk => sdk.Kind == SdkKind.Apple
                 && SamePath(sdk.EnvironmentPath, toolSet.EnvironmentPath)
                 && sdk.Layouts.Any(layout => layout.Platform == platform
-                    && layout.Architecture == architecture))
+                    && layout.Architecture == architecture && BuildInputs.AppleSdk(layout)))
             .OrderByDescending(sdk => sdk.Version)
             .FirstOrDefault();
         TargetLayout? platformLayout = platformSdk is null
@@ -83,7 +89,7 @@ internal static class XcodeToolchainResolver
 
         Version? deploymentVersion = platformLayout.MinimumDeploymentVersion
             ?? platformLayout.DefaultDeploymentVersion;
-        string triple = TargetTripleIdentity.Apple(
+        string triple = AppleTargetArguments.Triple(
             platform, architecture, deploymentVersion);
         Sdk? compilerSdk = await FindCompilerSdkAsync(
             context,
@@ -98,7 +104,7 @@ internal static class XcodeToolchainResolver
             cancellationToken).ConfigureAwait(false);
         TargetLayout? compilerLayout = compilerSdk is null
             ? null
-            : FindLayout(compilerSdk, platform, architecture, triple);
+            : FindLayout(compilerSdk, platform, architecture);
         if (compilerSdk is null || compilerLayout is null)
         {
             candidate.Invalidate(
@@ -134,18 +140,11 @@ internal static class XcodeToolchainResolver
             candidate,
             toolSet,
             ToolNames.Ranlib, query, cancellationToken).ConfigureAwait(false);
-        Tool? linker = await FindToolAsync(
-            context,
-            candidate,
-            toolSet,
-            ToolNames.Ld, query, cancellationToken).ConfigureAwait(false);
         if (!RequireTools(
             candidate,
             (cCompiler, "clang"),
             (cppCompiler, "clang++"),
-            (archiver, "ar"),
-            (ranlib, "ranlib"),
-            (linker, "ld")))
+            (archiver, "ar")))
         {
             return;
         }
@@ -170,14 +169,13 @@ internal static class XcodeToolchainResolver
             CppCompiler = cppCompiler!,
             Archiver = archiver!,
             Ranlib = ranlib,
-            Linker = linker!,
             Environment = context.EnvironmentFor(owner.Manifest),
             ExecutionMode = CanRunNative(context, platform, architecture)
                 ? ExecutionMode.Native
                 : ExecutionMode.BuildOnly,
         };
         candidate.Decisions.Add(
-            "The Xcode compiler, linker, compiler SDK, and platform SDK share one developer environment.");
+            "The Xcode compiler and SDK inputs share one developer environment.");
         candidate.Status = CandidateStatus.Resolved;
     }
 }

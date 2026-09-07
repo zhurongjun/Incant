@@ -108,15 +108,15 @@ public sealed class Finder
                 && snapshot.ProductVersion?.Matches(sdk.ProductVersion) is not false)
             .Select(sdk => sdk.WithLayouts(sdk.Layouts.Where(layout => Matches(layout, snapshot)), sdk.Sources))
             .Where(sdk => sdk.Layouts.Count > 0 || !HasTargetConstraint(snapshot))
-            .GroupBy(sdk => (sdk.Kind, Root: PathKey(sdk.RootPath), sdk.Version,
-                Compiler: sdk.CompilerPath is null ? null : PathKey(sdk.CompilerPath)))
+            .GroupBy(sdk => (sdk.Kind, Root: SearchPaths.PathKey(sdk.RootPath), sdk.Version,
+                Compiler: sdk.CompilerPath is null ? null : SearchPaths.PathKey(sdk.CompilerPath)))
             .Select(group =>
             {
-                Sdk preferred = group.OrderBy(sdk => Priority(sdk.Sources)).First();
-                return preferred.WithLayouts(MergeLayouts(group.OrderBy(sdk => Priority(sdk.Sources)).SelectMany(sdk => sdk.Layouts)),
+                Sdk preferred = group.OrderBy(sdk => SearchPaths.SourcePriority(sdk.Sources)).First();
+                return preferred.WithLayouts(MergeLayouts(group.OrderBy(sdk => SearchPaths.SourcePriority(sdk.Sources)).SelectMany(sdk => sdk.Layouts)),
                     group.SelectMany(sdk => sdk.Sources).Distinct().Order(), group.SelectMany(sdk => sdk.Diagnostics).Distinct());
             })
-            .OrderBy(sdk => Priority(sdk.Sources))
+            .OrderBy(sdk => SearchPaths.SourcePriority(sdk.Sources))
             .ThenBy(sdk => sdk.Channel == Channel.Stable ? 0 : 1)
             .ThenByDescending(sdk => sdk.Version)
             .ThenBy(sdk => sdk.RootPath, SearchPaths.Comparer).ToArray();
@@ -177,14 +177,6 @@ public sealed class Finder
     private static bool HasTargetConstraint(SdkQuery query) =>
         query.TargetPlatform is not null || query.TargetArchitecture is not null
         || query.TargetTriple is not null || query.AndroidApi is not null || query.Multilib is not null;
-
-    private static int Priority(IReadOnlyList<Source> sources) => sources.Count == 0 ? int.MaxValue : (int)sources.Min();
-
-    private static string PathKey(string path)
-    {
-        string normalized = SearchPaths.Normalize(path);
-        return OperatingSystem.IsWindows() ? normalized.ToUpperInvariant() : normalized;
-    }
 
     private static async Task<DiscoveryResult> RunProviderAsync(
         IDiscoveryProvider provider, SdkQuery query, DiscoveryContext context, CancellationToken cancellationToken)

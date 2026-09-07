@@ -28,8 +28,25 @@ internal static class ResolveStage
         await BundleToolchainResolver.ResolveAsync(
             context, cancellationToken).ConfigureAwait(false);
         ToolchainResolution.EnsureUniqueCandidateIds(context);
-        ToolchainResolution.EnsureCoverage(context);
-        return context.RequiredCandidatesSatisfy(
+        foreach (ToolchainCandidate candidate in context.Candidates)
+        {
+            if (candidate.Status == CandidateStatus.Resolved && candidate.Toolchain is ResolvedToolchain toolchain)
+            {
+                foreach (string reason in BuildInputs.Missing(toolchain))
+                {
+                    candidate.Invalidate(reason);
+                }
+            }
+
+            if (candidate.Status == CandidateStatus.Invalid && !candidate.Required)
+            {
+                candidate.Skip(string.Join(" ", candidate.Failures));
+                candidate.Failures.Clear();
+            }
+        }
+
+        bool coverage = ToolchainCoverage.Evaluate(context, completed: false);
+        return coverage && context.CandidatesSatisfy(
             candidate => candidate.Status == CandidateStatus.Resolved);
     }
 }

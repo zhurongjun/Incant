@@ -14,329 +14,123 @@ namespace Incant.AutoTest.CppToolchain;
 
 internal static class DiscoveryStage
 {
-    internal static async Task<bool> ExecuteAsync(
-        AutoTestContext context,
-        CancellationToken cancellationToken)
+    internal static async Task<bool> ExecuteAsync(AutoTestContext context, CancellationToken cancellationToken)
     {
         var toolFinder = ToolFinder.CreateDefault();
         var sdkFinder = SdkFinder.CreateDefault();
-        DiscoveryProbe allToolSets = await RunToolProbeAsync(
-            context,
-            "all/toolsets",
-            "unconstrained",
-            toolFinder,
-            new ToolSetQuery
-            {
-                IncludePreview = true,
-                Environment = context.BaseEnvironment,
-            },
+        DiscoveryProbe tools = await RunToolProbeAsync(context, "automatic/toolsets", "automatic",
+            toolFinder, new ToolSetQuery { IncludePreview = true, Environment = context.BaseEnvironment },
             cancellationToken).ConfigureAwait(false);
-        DiscoveryProbe allSdks = await RunSdkProbeAsync(
-            context,
-            "all/sdks",
-            "unconstrained",
-            sdkFinder,
-            new SdkQuery
-            {
-                IncludePreview = true,
-                Environment = context.BaseEnvironment,
-            },
+        DiscoveryProbe sdks = await RunSdkProbeAsync(context, "automatic/sdks", "automatic",
+            sdkFinder, new SdkQuery { IncludePreview = true, Environment = context.BaseEnvironment },
             cancellationToken).ConfigureAwait(false);
 
         foreach (InstallationRequirement requirement in context.Profile.Installations)
         {
-            InstallationManifest manifest = context.Manifest!.Installations
-                .Single(installation => installation.Id == requirement.Id);
-            var discovery = new InstallationDiscovery(requirement, manifest);
+            InstallationManifest? manifest = context.Manifest!.Installations
+                .SingleOrDefault(item => item.Id == requirement.Id);
+            var discovery = new InstallationDiscovery(requirement, manifest
+                ?? InstallationIdentity.Ambient(requirement.Id, requirement.Kind, string.Empty, string.Empty));
             context.Installations.Add(discovery);
-            await DiscoverInstallationAsync(
-                context, discovery, toolFinder, sdkFinder, cancellationToken).ConfigureAwait(false);
+            if (manifest is null || manifest.Kind != requirement.Kind
+                || string.IsNullOrWhiteSpace(manifest.RootPath) || !Path.IsPathFullyQualified(manifest.RootPath)
+                || !File.Exists(manifest.RootPath) && !Directory.Exists(manifest.RootPath))
+            {
+                discovery.Failures.Add("The declared installation is absent or its root/kind is unusable.");
+                continue;
+            }
+
+            IReadOnlyDictionary<string, string?> environment = context.EnvironmentFor(manifest);
+            if (GetToolKind(requirement.Kind) is ToolKind kind)
+            {
+                var query = new ToolSetQuery
+                {
+                    Kind = kind,
+                    RootPath = manifest.RootPath,
+                    IncludePreview = true,
+                    Environment = environment,
+                };
+                query = requirement.ToolVersion?.Apply(query) ?? query;
+                DiscoveryProbe probe = await RunToolProbeAsync(context, requirement.Id + "/toolsets",
+                    "managed installation", toolFinder, query, cancellationToken).ConfigureAwait(false);
+                discovery.ToolSets.AddRange(probe.ToolSets);
+                if (probe.ToolSets.Count == 0)
+                {
+                    discovery.Failures.Add(probe.Error ?? "No ToolSet satisfies the declared installation range.");
+                }
+            }
+
+            foreach (SdkKind sdkKind in GetSdkKinds(requirement.Kind))
+            {
+                var query = new SdkQuery
+                {
+                    Kind = sdkKind,
+                    RootPath = manifest.RootPath,
+                    IncludePreview = true,
+                    Environment = environment,
+                };
+                query = requirement.SdkVersion?.Apply(query) ?? query;
+                DiscoveryProbe probe = await RunSdkProbeAsync(context, requirement.Id + "/sdk/" + sdkKind,
+                    "managed installation", sdkFinder, query, cancellationToken).ConfigureAwait(false);
+                discovery.Sdks.AddRange(probe.Sdks);
+                if (probe.Error is not null)
+                {
+                    discovery.Decisions.Add(probe.Error);
+                }
+            }
         }
 
-        return allToolSets.Completed
-            && allSdks.Completed
-            && context.Installations
-            .Where(installation => installation.Requirement.Required)
-            .All(installation => installation.Succeeded);
-    }
-
-    private static async Task DiscoverInstallationAsync(
-        AutoTestContext context,
-        InstallationDiscovery discovery,
-        ToolFinder toolFinder,
-        SdkFinder sdkFinder,
-        CancellationToken cancellationToken)
-    {
-        IReadOnlyDictionary<string, string?> environment =
-            context.EnvironmentFor(discovery.Manifest);
-        ToolKind? toolKind = GetToolKind(discovery.Requirement.Kind);
-        if (toolKind is ToolKind concreteToolKind)
+        foreach (ToolSet toolSet in tools.ToolSets.DistinctBy(InstallationIdentity.ToolSetKey))
         {
-            await DiscoverToolSetsAsync(
-                context,
-                discovery,
-                toolFinder,
-                concreteToolKind,
-                environment,
-                cancellationToken).ConfigureAwait(false);
+            InstallationKind? kind = toolSet.Kind switch
+            {
+                ToolKind.VisualStudio => InstallationKind.VisualStudio,
+                ToolKind.Gnu => InstallationKind.Gnu,
+                ToolKind.Llvm => InstallationKind.Llvm,
+                ToolKind.Xcode => InstallationKind.Xcode,
+                _ => null,
+            };
+            if (kind is null || !context.Profile.Definition.RequiredHostFamilies.Contains(kind.Value)
+                || context.Installations.Any(owner => owner.ToolSets.Any(managed =>
+                    InstallationIdentity.ToolSetKey(managed) == InstallationIdentity.ToolSetKey(toolSet))))
+            {
+                continue;
+            }
+
+            string id = "ambient-" + kind + "-" + InstallationIdentity.ShortId(InstallationIdentity.ToolSetKey(toolSet));
+            string root = kind == InstallationKind.Xcode ? toolSet.EnvironmentPath
+                : kind is InstallationKind.Gnu or InstallationKind.Llvm
+                    ? toolSet.CompilerPath ?? toolSet.RootPath : toolSet.RootPath;
+            var owner = new InstallationDiscovery(new InstallationRequirement(id, kind.Value, null, null, false),
+                InstallationIdentity.Ambient(id, kind.Value, root, toolSet.Version?.ToString() ?? "unknown",
+                    kind == InstallationKind.Xcode ? toolSet.EnvironmentPath : null), managed: false);
+            owner.ToolSets.Add(toolSet);
+            owner.Sdks.AddRange(sdks.Sdks.Where(sdk => GetSdkKinds(kind.Value).Contains(sdk.Kind)
+                && (kind == InstallationKind.Xcode
+                    ? PathIdentity.AreEqual(toolSet.EnvironmentPath, sdk.EnvironmentPath)
+                    : kind == InstallationKind.VisualStudio
+                        ? ToolchainResolution.MsvcIdentityMatches(toolSet, sdk)
+                        : ToolchainResolution.CompilerMatches(toolSet, sdk))));
+            context.Installations.Add(owner);
         }
 
-        foreach (SdkKind sdkKind in GetSdkKinds(discovery.Requirement.Kind))
+        if (context.Profile.Definition.RequiredHostFamilies.Contains(InstallationKind.WindowsSdk))
         {
-            await DiscoverSdksAsync(
-                context,
-                discovery,
-                sdkFinder,
-                sdkKind,
-                environment,
-                cancellationToken).ConfigureAwait(false);
+            foreach (Sdk sdk in sdks.Sdks.Where(sdk => sdk.Kind == SdkKind.Windows)
+                .DistinctBy(InstallationIdentity.SdkKey))
+            {
+                string id = "ambient-windows-sdk-" + InstallationIdentity.ShortId(InstallationIdentity.SdkKey(sdk));
+                var owner = new InstallationDiscovery(
+                    new InstallationRequirement(id, InstallationKind.WindowsSdk, null, null, false),
+                    InstallationIdentity.Ambient(id, InstallationKind.WindowsSdk, sdk.RootPath,
+                        sdk.Version?.ToString() ?? "unknown"), managed: false);
+                owner.Sdks.Add(sdk);
+                context.Installations.Add(owner);
+            }
         }
 
-        if (toolKind is null && discovery.Sdks.Count == 0)
-        {
-            discovery.Failures.Add("No SDK matched the declared installation.");
-        }
-        else if (toolKind is not null && discovery.ToolSets.Count == 0)
-        {
-            discovery.Failures.Add("No ToolSet matched the declared installation.");
-        }
-    }
-
-    private static async Task DiscoverToolSetsAsync(
-        AutoTestContext context,
-        InstallationDiscovery discovery,
-        ToolFinder finder,
-        ToolKind kind,
-        IReadOnlyDictionary<string, string?> environment,
-        CancellationToken cancellationToken)
-    {
-        string prefix = discovery.Requirement.Id + "/toolsets";
-        var kindQuery = new ToolSetQuery
-        {
-            Kind = kind,
-            IncludePreview = true,
-            Environment = environment,
-        };
-        DiscoveryProbe automaticProbe = await RunToolProbeAsync(
-            context,
-            prefix + "/automatic",
-            $"kind {kind} with the installation environment",
-            finder,
-            kindQuery,
-            cancellationToken).ConfigureAwait(false);
-
-        VersionRule manifestVersion = ExactManifestVersion(
-            discovery.Requirement.ToolVersion, discovery.Manifest.Version);
-        ToolSetQuery versionQuery = manifestVersion.Apply(kindQuery);
-        DiscoveryProbe versionProbe = await RunToolProbeAsync(
-            context,
-            prefix + "/version",
-            Describe(manifestVersion),
-            finder,
-            versionQuery,
-            cancellationToken).ConfigureAwait(false);
-
-        ToolSetQuery explicitQuery = versionQuery with
-        {
-            RootPath = discovery.Manifest.RootPath,
-        };
-        DiscoveryProbe explicitProbe = await RunToolProbeAsync(
-            context,
-            prefix + "/explicit",
-            discovery.Manifest.RootPath,
-            finder,
-            explicitQuery,
-            cancellationToken).ConfigureAwait(false);
-
-        ToolSet[] automaticMatches = automaticProbe.ToolSets
-            .Where(toolSet => toolSet.Kind == kind
-                && Related(discovery.Manifest.RootPath, toolSet)
-                && manifestVersion.Matches(toolSet)
-                && (discovery.Requirement.ToolVersion is null
-                    || discovery.Requirement.ToolVersion.Matches(toolSet)))
-            .ToArray();
-        ToolSet[] versionMatches = versionProbe.ToolSets
-            .Where(toolSet => Related(discovery.Manifest.RootPath, toolSet)
-                && (discovery.Requirement.ToolVersion is null
-                    || discovery.Requirement.ToolVersion.Matches(toolSet)))
-            .ToArray();
-        ToolSet[] explicitMatches = explicitProbe.ToolSets.ToArray();
-        discovery.ToolSets.AddRange(explicitMatches);
-        DiscoveryConsistency.ValidateExplicitToolSetInvocation(
-            discovery.Manifest.RootPath,
-            explicitMatches,
-            discovery);
-        DiscoveryConsistency.CompareToolSets(
-            automaticMatches,
-            explicitMatches,
-            discovery,
-            "ToolSet automatic query");
-        DiscoveryConsistency.CompareToolSets(
-            versionMatches,
-            explicitMatches,
-            discovery,
-            "ToolSet version query");
-
-        string missingPath = Path.Combine(
-            context.Options.WorkRoot, "__missing-explicit-" + Guid.NewGuid().ToString("N"));
-        DiscoveryProbe missingPathProbe = await ExpectToolDiscoveryExceptionAsync(
-            context,
-            prefix + "/missing-path",
-            finder,
-            kindQuery with { RootPath = missingPath },
-            cancellationToken).ConfigureAwait(false);
-        ToolSetQuery impossibleVersionQuery = ExactManifestVersion(
-            discovery.Requirement.ToolVersion, "9999.0").Apply(kindQuery) with
-        {
-            RootPath = discovery.Manifest.RootPath,
-        };
-        DiscoveryProbe wrongVersion = await RunToolProbeAsync(
-            context,
-            prefix + "/wrong-version",
-            "explicit root with version 9999.0",
-            finder,
-            impossibleVersionQuery,
-            cancellationToken).ConfigureAwait(false);
-        if (wrongVersion.ToolSets.Count != 0)
-        {
-            discovery.Failures.Add("The explicit ToolSet root matched an impossible version.");
-        }
-
-        if (!automaticProbe.Completed
-            || !versionProbe.Completed
-            || !explicitProbe.Succeeded
-            || !missingPathProbe.Succeeded
-            || !wrongVersion.Succeeded)
-        {
-            discovery.Failures.Add("One or more ToolSet discovery modes failed.");
-        }
-    }
-
-    private static async Task DiscoverSdksAsync(
-        AutoTestContext context,
-        InstallationDiscovery discovery,
-        SdkFinder finder,
-        SdkKind kind,
-        IReadOnlyDictionary<string, string?> environment,
-        CancellationToken cancellationToken)
-    {
-        string prefix = discovery.Requirement.Id + "/sdks/" + kind;
-        var kindQuery = new SdkQuery
-        {
-            Kind = kind,
-            IncludePreview = true,
-            Environment = environment,
-        };
-        DiscoveryProbe automaticProbe = await RunSdkProbeAsync(
-            context,
-            prefix + "/automatic",
-            $"kind {kind} with the installation environment",
-            finder,
-            kindQuery,
-            cancellationToken).ConfigureAwait(false);
-
-        VersionRule manifestVersion = ExactManifestVersion(
-            discovery.Requirement.SdkVersion, discovery.Manifest.Version);
-        SdkQuery versionQuery = manifestVersion.Apply(kindQuery);
-        DiscoveryProbe versionProbe = await RunSdkProbeAsync(
-            context,
-            prefix + "/version",
-            Describe(manifestVersion),
-            finder,
-            versionQuery,
-            cancellationToken).ConfigureAwait(false);
-
-        SdkQuery explicitQuery = versionQuery with
-        {
-            RootPath = discovery.Manifest.RootPath,
-        };
-        DiscoveryProbe explicitProbe = await RunSdkProbeAsync(
-            context,
-            prefix + "/explicit",
-            discovery.Manifest.RootPath,
-            finder,
-            explicitQuery,
-            cancellationToken).ConfigureAwait(false);
-
-        Sdk[] automaticMatches = automaticProbe.Sdks
-            .Where(sdk => sdk.Kind == kind
-                && Related(discovery.Manifest.RootPath, sdk)
-                && SdkVersionMatches(manifestVersion, sdk)
-                && SdkVersionMatches(discovery.Requirement.SdkVersion, sdk))
-            .ToArray();
-        Sdk[] versionMatches = versionProbe.Sdks
-            .Where(sdk => Related(discovery.Manifest.RootPath, sdk)
-                && SdkVersionMatches(discovery.Requirement.SdkVersion, sdk))
-            .ToArray();
-        Sdk[] explicitMatches = explicitProbe.Sdks.ToArray();
-        discovery.Sdks.AddRange(explicitMatches);
-        if (explicitMatches.Length == 0)
-        {
-            discovery.Failures.Add(
-                $"No {kind} SDK matched the declared installation and exact version.");
-        }
-        DiscoveryConsistency.ValidateExplicitSdkInvocation(
-            discovery.Manifest.RootPath,
-            explicitMatches,
-            discovery,
-            $"SDK {kind}");
-        DiscoveryConsistency.CompareSdks(
-            automaticMatches,
-            explicitMatches,
-            discovery,
-            $"SDK {kind} automatic query");
-        DiscoveryConsistency.CompareSdks(
-            versionMatches,
-            explicitMatches,
-            discovery,
-            $"SDK {kind} version query");
-
-        string missingPath = Path.Combine(
-            context.Options.WorkRoot, "__missing-explicit-" + Guid.NewGuid().ToString("N"));
-        DiscoveryProbe missingPathProbe = await ExpectSdkDiscoveryExceptionAsync(
-            context,
-            prefix + "/missing-path",
-            finder,
-            kindQuery with { RootPath = missingPath },
-            cancellationToken).ConfigureAwait(false);
-        SdkQuery impossibleVersionQuery = ExactManifestVersion(
-            discovery.Requirement.SdkVersion, "9999.0").Apply(kindQuery) with
-        {
-            RootPath = discovery.Manifest.RootPath,
-        };
-        DiscoveryProbe wrongVersion = await RunSdkProbeAsync(
-            context,
-            prefix + "/wrong-version",
-            "explicit root with version 9999.0",
-            finder,
-            impossibleVersionQuery,
-            cancellationToken).ConfigureAwait(false);
-        if (wrongVersion.Sdks.Count != 0)
-        {
-            discovery.Failures.Add($"The explicit {kind} SDK root matched an impossible version.");
-        }
-
-        DiscoveryProbe wrongTarget = await RunSdkProbeAsync(
-            context,
-            prefix + "/wrong-target",
-            "explicit root with an incompatible target",
-            finder,
-            explicitQuery with { TargetPlatform = IncompatibleTarget(kind) },
-            cancellationToken).ConfigureAwait(false);
-        if (wrongTarget.Sdks.Count != 0)
-        {
-            discovery.Failures.Add($"The explicit {kind} SDK root matched an incompatible target.");
-        }
-
-        if (!automaticProbe.Completed
-            || !versionProbe.Completed
-            || !explicitProbe.Succeeded
-            || !missingPathProbe.Succeeded
-            || !wrongVersion.Succeeded
-            || !wrongTarget.Succeeded)
-        {
-            discovery.Failures.Add($"One or more {kind} SDK discovery modes failed.");
-        }
+        return context.Installations.Where(owner => owner.Managed && owner.Requirement.Required)
+            .All(owner => owner.Succeeded);
     }
 
     internal static async Task<DiscoveryProbe> RunSdkProbeAsync(
@@ -347,6 +141,12 @@ internal static class DiscoveryStage
         SdkQuery query,
         CancellationToken cancellationToken)
     {
+        string key = System.Text.Json.JsonSerializer.Serialize(query);
+        if (context.SdkQueries.TryGetValue(key, out DiscoveryProbe? cached))
+        {
+            return cached;
+        }
+
         var probe = new DiscoveryProbe
         {
             Name = name,
@@ -358,9 +158,9 @@ internal static class DiscoveryStage
         {
             SdkDiscoveryResult result = await finder.FindSdksAsync(
                 query, cancellationToken).ConfigureAwait(false);
-            probe.Succeeded = result.Diagnostics.All(
-                diagnostic => diagnostic.Severity != DiagnosticSeverity.Error);
+            probe.Succeeded = true;
             probe.Sdks = result.Sdks;
+            context.SdkQueries.Add(key, probe);
             probe.Diagnostics = result.Diagnostics;
             context.AddDiagnostics(result.Diagnostics);
         }
@@ -391,8 +191,7 @@ internal static class DiscoveryStage
         {
             ToolDiscoveryResult result = await finder.FindToolSetsAsync(
                 query, cancellationToken).ConfigureAwait(false);
-            probe.Succeeded = result.Diagnostics.All(
-                diagnostic => diagnostic.Severity != DiagnosticSeverity.Error);
+            probe.Succeeded = true;
             probe.ToolSets = result.ToolSets;
             probe.Diagnostics = result.Diagnostics;
             context.AddDiagnostics(result.Diagnostics);
@@ -404,116 +203,6 @@ internal static class DiscoveryStage
 
         return probe;
     }
-
-    private static async Task<DiscoveryProbe> ExpectToolDiscoveryExceptionAsync(
-        AutoTestContext context,
-        string name,
-        ToolFinder finder,
-        ToolSetQuery query,
-        CancellationToken cancellationToken)
-    {
-        var probe = new DiscoveryProbe
-        {
-            Name = name,
-            Subject = DiscoverySubject.ToolSets,
-            Query = query.RootPath!,
-            ExpectedFailure = true,
-        };
-        context.DiscoveryProbes.Add(probe);
-        try
-        {
-            await finder.FindToolSetsAsync(query, cancellationToken).ConfigureAwait(false);
-            probe.Error = "Discovery did not reject the nonexistent explicit path.";
-        }
-        catch (DiscoveryException exception)
-        {
-            probe.Succeeded = true;
-            probe.Diagnostics = exception.Diagnostics;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            probe.Error = exception.ToString();
-        }
-
-        return probe;
-    }
-
-    private static async Task<DiscoveryProbe> ExpectSdkDiscoveryExceptionAsync(
-        AutoTestContext context,
-        string name,
-        SdkFinder finder,
-        SdkQuery query,
-        CancellationToken cancellationToken)
-    {
-        var probe = new DiscoveryProbe
-        {
-            Name = name,
-            Subject = DiscoverySubject.Sdks,
-            Query = query.RootPath!,
-            ExpectedFailure = true,
-        };
-        context.DiscoveryProbes.Add(probe);
-        try
-        {
-            await finder.FindSdksAsync(query, cancellationToken).ConfigureAwait(false);
-            probe.Error = "Discovery did not reject the nonexistent explicit path.";
-        }
-        catch (DiscoveryException exception)
-        {
-            probe.Succeeded = true;
-            probe.Diagnostics = exception.Diagnostics;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            probe.Error = exception.ToString();
-        }
-
-        return probe;
-    }
-
-    private static bool SdkVersionMatches(VersionRule? rule, Sdk sdk)
-    {
-        if (rule is null)
-        {
-            return true;
-        }
-
-        Version? actual = rule.Source == VersionSource.ProductVersion
-            ? sdk.ProductVersion
-            : sdk.Version;
-        return rule.Constraint.Matches(actual);
-    }
-
-    private static bool Related(string root, ToolSet toolSet) =>
-        Related(root, toolSet.RootPath)
-        || Related(root, toolSet.EnvironmentPath)
-        || toolSet.CompilerPath is not null && Related(root, toolSet.CompilerPath);
-
-    private static bool Related(string root, Sdk sdk) =>
-        Related(root, sdk.RootPath)
-        || Related(root, sdk.EnvironmentPath)
-        || sdk.CompilerPath is not null && Related(root, sdk.CompilerPath);
-
-    private static bool Related(string left, string right) =>
-        PathIdentity.Related(left, right);
-
-    private static VersionRule ExactManifestVersion(VersionRule? profileRule, string value) =>
-        new(
-            value,
-            profileRule?.Source ?? VersionSource.Version,
-            VersionPrecision.Exact);
-
-    private static string Describe(VersionRule? rule) =>
-        rule is null ? "no version constraint" : $"{rule.Source} {rule.Precision} {rule.Value}";
-
-    private static TargetPlatform IncompatibleTarget(SdkKind kind) => kind switch
-    {
-        SdkKind.Windows or SdkKind.Msvc => TargetPlatform.Wasi,
-        SdkKind.Apple or SdkKind.AppleClang => TargetPlatform.Linux,
-        SdkKind.Gnu or SdkKind.Llvm or SdkKind.Linux or SdkKind.Sysroot => TargetPlatform.Wasi,
-        SdkKind.AndroidNdk or SdkKind.Emscripten or SdkKind.WasiSdk => TargetPlatform.Windows,
-        _ => TargetPlatform.Unknown,
-    };
 
     private static ToolKind? GetToolKind(InstallationKind kind) => kind switch
     {
