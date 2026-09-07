@@ -45,7 +45,8 @@ internal static partial class WasiTargetResolver
         return version?.Major >= 33 ? Preview1Triple : LegacyPreview1Triple;
     }
 
-    internal static IReadOnlyList<string> ResourceTriples(string targetTriple)
+    // These are ordered layout alternatives, not additive resource search paths.
+    internal static IReadOnlyList<string> ResourceTripleCandidates(string targetTriple)
     {
         string canonical = new TargetIdentity(targetTriple).Canonical;
         string[] candidates = canonical == Preview1Triple

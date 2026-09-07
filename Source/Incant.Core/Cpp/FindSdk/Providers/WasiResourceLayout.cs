@@ -38,46 +38,85 @@ internal sealed class WasiResourceLayout
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        IReadOnlyList<string> triples = WasiTargetResolver.ResourceTriples(targetTriple);
-        string[] includeRoots = [Path.Combine(sysroot, "include"), Path.Combine(sysroot, "usr", "include")];
-        string[] libraryRoots = [Path.Combine(sysroot, "lib"), Path.Combine(sysroot, "usr", "lib")];
-        var target = new TargetDirectories(sysroot, targetTriple, includeRoots,
-            triples.SelectMany(triple => includeRoots.Select(root => Path.Combine(root, triple))).ToArray(),
-            triples.SelectMany(triple => libraryRoots.Select(root => Path.Combine(root, triple))).ToArray());
+        IReadOnlyList<string> triples = WasiTargetResolver.ResourceTripleCandidates(targetTriple);
+        string usr = Path.Combine(sysroot, "usr");
+        // Prefer a complete prefix, while retaining sysroots that separate their include and lib roots.
+        (string Include, string Library)[] prefixes = [(sysroot, sysroot), (usr, usr), (sysroot, usr), (usr, sysroot)];
+        TargetDirectories[] targets = triples.SelectMany(triple => prefixes.Select(prefix =>
+            new TargetDirectories(sysroot, targetTriple, Path.Combine(prefix.Include, "include"),
+                Path.Combine(prefix.Library, "lib"), triple))).ToArray();
         var diagnostics = new List<Diagnostic>();
-        Variant[] variants = s_variants.Where(variant =>
-            target.TargetIncludes.Concat(target.TargetLibraries)
-                .Any(path => HasDirectoryEntry(Path.Combine(path, variant.Directory!), diagnostics))).ToArray();
-        if (variants.Length == 0)
+        var groups = new List<(Variant Variant, TargetDirectories[] Targets)>();
+        foreach (Variant variant in s_variants)
         {
-            variants = [new Variant(null, null)];
+            cancellationToken.ThrowIfCancellationRequested();
+            TargetDirectories[] matching = targets.Where(target =>
+                HasDirectoryEntry(Path.Combine(target.TargetInclude, variant.Directory!), diagnostics)
+                || HasDirectoryEntry(Path.Combine(target.TargetLibrary, variant.Directory!), diagnostics)).ToArray();
+            if (matching.Length > 0)
+            {
+                groups.Add((variant, matching));
+            }
         }
 
-        return variants.Select(variant => new WasiResourceLayout(target, variant, diagnostics, cancellationToken)
-            .Collect()).ToArray();
+        if (groups.Count == 0)
+        {
+            groups.Add((new Variant(null, null), targets));
+        }
+
+        return groups.Select(group => SelectLayout(group.Targets, group.Variant, diagnostics, cancellationToken)).ToArray();
     }
 
-    private TargetLayout Collect()
+    private static TargetLayout SelectLayout(
+        IReadOnlyList<TargetDirectories> targets,
+        Variant variant,
+        IReadOnlyList<Diagnostic> diagnostics,
+        CancellationToken cancellationToken)
     {
-        IEnumerable<string> cppDirectories = _variant.Directory is null
-            ? _target.TargetIncludes.Concat(_target.IncludeRoots).Select(path => Path.Combine(path, "c++", "v1"))
-            : _target.TargetIncludes.Select(path => Path.Combine(path, _variant.Directory, "c++", "v1"));
-        CollectDirectories(cppDirectories, path => _resources.Add(ResourcePurpose.CppInclude, path));
+        var candidates = new List<CollectedLayout>();
+        foreach (TargetDirectories target in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CollectedLayout candidate = new WasiResourceLayout(target, variant, diagnostics, cancellationToken).Collect();
+            if (candidate.HasRequiredResources)
+            {
+                return candidate.Layout;
+            }
+
+            candidates.Add(candidate);
+        }
+
+        // Keep one target alias and one location per component. A union of candidates can hide
+        // missing components and make libc++ include_next encounter another copy of its own wrapper.
+        return (candidates.FirstOrDefault(candidate => candidate.HasFiles) ?? candidates[0]).Layout;
+    }
+
+    private CollectedLayout Collect()
+    {
+        string targetCppDirectory = Path.Combine(_target.TargetInclude, _variant.Directory ?? "", "c++", "v1");
+        string[] cppDirectories = _variant.Directory is null
+            ? [targetCppDirectory, Path.Combine(_target.IncludeRoot, "c++", "v1")]
+            : [targetCppDirectory];
+        string? cppDirectory = SelectCppDirectory(cppDirectories);
+        if (cppDirectory is not null)
+        {
+            CollectDirectories([cppDirectory], path => _resources.Add(ResourcePurpose.CppInclude, path));
+        }
+
         // C headers also serve C++, but cannot establish a C++ standard-library header group.
         bool hasCppHeaders = HasHeader(_resources.Build(), ResourcePurpose.CppInclude, "array");
-        CollectDirectories(_target.TargetIncludes.Concat(_target.IncludeRoots),
-            path => Resources.Headers(_resources, path));
-
+        CollectDirectories([_target.TargetInclude, _target.IncludeRoot], path => Resources.Headers(_resources, path));
         if (_variant.Directory is not null)
         {
-            CollectDirectories(_target.TargetLibraries.Select(path => Path.Combine(path, _variant.Directory)),
+            CollectDirectories([Path.Combine(_target.TargetLibrary, _variant.Directory)],
                 path => CollectLibraries(path, includeCppRuntime: true));
         }
 
-        CollectDirectories(_target.TargetLibraries,
+        CollectDirectories([_target.TargetLibrary],
             path => CollectLibraries(path, includeCppRuntime: _variant.Directory is null));
         IReadOnlyList<Resource> resources = _resources.Build();
-        if (!HasHeader(resources, ResourcePurpose.CInclude, "stdio.h"))
+        bool hasCHeaders = HasHeader(resources, ResourcePurpose.CInclude, "stdio.h");
+        if (!hasCHeaders)
         {
             Missing("C header", "stdio.h");
         }
@@ -87,6 +126,7 @@ internal sealed class WasiResourceLayout
             Missing("C++ header", "array");
         }
 
+        bool hasRequiredResources = hasCHeaders && hasCppHeaders;
         string[] requiredLibraries = _variant.Identifier == "eh"
             ? ["libc.a", "libc++.a", "libc++abi.a", "libunwind.a"]
             : ["libc.a", "libc++.a", "libc++abi.a"];
@@ -95,12 +135,66 @@ internal sealed class WasiResourceLayout
             if (!resources.Any(resource => resource.Purpose == ResourcePurpose.Library
                 && Path.GetFileName(resource.Path) == library))
             {
+                hasRequiredResources = false;
                 Missing("library", library);
             }
         }
 
-        return new TargetLayout(TargetPlatform.Wasi, TargetArchitecture.Wasm32, resources,
+        bool hasFiles = resources.Any(resource => resource.Purpose is ResourcePurpose.Library or ResourcePurpose.Startup)
+            || resources.Where(resource => resource.Purpose is ResourcePurpose.CInclude or ResourcePurpose.CppInclude)
+                .Select(resource => resource.Path).Distinct(SearchPaths.Comparer).Any(HasFiles);
+        var layout = new TargetLayout(TargetPlatform.Wasi, TargetArchitecture.Wasm32, resources,
             _target.Triple, _target.Sysroot, multilib: _variant.Identifier, diagnostics: _diagnostics.Distinct());
+        return new CollectedLayout(layout, hasRequiredResources, hasFiles);
+    }
+
+    private string? SelectCppDirectory(IEnumerable<string> directories)
+    {
+        string? firstExisting = null;
+        string? firstWithFiles = null;
+        foreach (string directory in directories)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                string path = SearchPaths.Normalize(directory);
+                if (!Directory.Exists(path))
+                {
+                    continue;
+                }
+
+                if (File.Exists(Path.Combine(path, "array")))
+                {
+                    return path;
+                }
+
+                firstExisting ??= path;
+                if (SearchPaths.Files(path).Any())
+                {
+                    firstWithFiles ??= path;
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                _diagnostics.Add(Resources.Missing("WASI SDK", exception.Message, directory));
+            }
+        }
+
+        return firstWithFiles ?? firstExisting;
+    }
+
+    private bool HasFiles(string directory)
+    {
+        _cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            return SearchPaths.Files(directory).Any();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _diagnostics.Add(Resources.Missing("WASI SDK", exception.Message, directory));
+            return false;
+        }
     }
 
     private void CollectDirectories(IEnumerable<string> directories, Action<string> collect)
@@ -173,10 +267,17 @@ internal sealed class WasiResourceLayout
 
     private sealed record Variant(string? Identifier, string? Directory);
 
+    private sealed record CollectedLayout(TargetLayout Layout, bool HasRequiredResources, bool HasFiles);
+
     private sealed record TargetDirectories(
         string Sysroot,
         string Triple,
-        IReadOnlyList<string> IncludeRoots,
-        IReadOnlyList<string> TargetIncludes,
-        IReadOnlyList<string> TargetLibraries);
+        string IncludeRoot,
+        string LibraryRoot,
+        string ResourceTriple)
+    {
+        internal string TargetInclude => Path.Combine(IncludeRoot, ResourceTriple);
+
+        internal string TargetLibrary => Path.Combine(LibraryRoot, ResourceTriple);
+    }
 }
