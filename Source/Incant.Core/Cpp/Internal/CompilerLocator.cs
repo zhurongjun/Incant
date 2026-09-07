@@ -458,6 +458,7 @@ internal static partial class CompilerLocator
                 fullRoot,
                 EnvironmentForBin(bin),
                 source,
+                CompilerDiscoveryAnchor.File,
                 isPrivate ?? !IsSharedDirectory(bin),
                 associatedDirectories));
             return;
@@ -492,6 +493,7 @@ internal static partial class CompilerLocator
                     path,
                     environment,
                     source,
+                    CompilerDiscoveryAnchor.Directory,
                     privateDirectory,
                     associatedDirectories));
             }

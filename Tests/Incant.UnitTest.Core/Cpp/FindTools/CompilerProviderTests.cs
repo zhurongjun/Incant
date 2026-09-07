@@ -156,6 +156,63 @@ public sealed class CompilerProviderTests
         Assert.Equal(Path.Combine(bin, "x86_64-linux-gnu-ld"), linker?.Path);
     }
 
+    [Theory]
+    [InlineData("CC", "gcc-14")]
+    [InlineData("CXX", "g++-14")]
+    public async Task EnvironmentCompilerPathOutranksHomebrewPrefixAliases(
+        string environmentVariable,
+        string compilerName)
+    {
+        RequireUnix();
+        using var installation = new SyntheticInstallation();
+        string compiler = installation.Compiler(
+            $"bin/{compilerName}", CompilerIdentity.Gnu, "14.2.0");
+        installation.Compiler(
+            "bin/aarch64-apple-darwin24-gcc-14",
+            CompilerIdentity.Gnu,
+            "14.2.0");
+        var environment = new Dictionary<string, string?>(Environment())
+        {
+            [environmentVariable] = compiler,
+            ["HOMEBREW_PREFIX"] = installation.RootPath,
+        };
+        var version = new VersionConstraint(
+            exact: new Version(14, 2, 0));
+
+        ToolSet? discoveredToolSet = await new ToolFinder(
+        [
+            new ToolCompilerProvider(),
+        ]).FindToolSetAsync(
+            new Incant.Core.Cpp.FindTools.ToolSetQuery
+            {
+                Kind = ToolKind.Gnu,
+                CompilerVersion = version,
+                IncludePreview = true,
+                Environment = environment,
+            },
+            TestContext.Current.CancellationToken);
+        Incant.Core.Cpp.FindSdk.Sdk? discoveredSdk = await new SdkFinder(
+        [
+            new SdkCompilerProvider(),
+        ]).FindSdkAsync(
+            new SdkQuery
+            {
+                Kind = SdkKind.Gnu,
+                Version = version,
+                TargetPlatform = TargetPlatform.Linux,
+                TargetArchitecture = TargetArchitecture.X64,
+                IncludePreview = true,
+                Environment = environment,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            compiler,
+            Assert.IsAssignableFrom<ToolSet>(
+                discoveredToolSet).CompilerPath);
+        Assert.Equal(compiler, discoveredSdk?.CompilerPath);
+    }
+
     [Fact]
     public async Task GentooPrivateSlotAcceptsUnversionedCompanionTools()
     {

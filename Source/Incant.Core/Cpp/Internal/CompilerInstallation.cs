@@ -147,6 +147,7 @@ internal sealed class CompilerInstallation
         CompilerInspection[] inspections = group.ToArray();
         IOrderedEnumerable<CompilerInspection> ordered = inspections
             .OrderBy(inspection => inspection.Candidate.Sources.Min())
+            .ThenBy(inspection => inspection.Candidate.DiscoveryAnchor)
             .ThenBy(inspection => DriverRank(inspection.Candidate.InvocationPath))
             .ThenBy(inspection => InvocationRank(
                 inspection.Candidate.InvocationPath))

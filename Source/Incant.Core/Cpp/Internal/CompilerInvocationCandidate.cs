@@ -1,17 +1,25 @@
 namespace Incant.Core.Cpp;
 
+internal enum CompilerDiscoveryAnchor
+{
+    File,
+    Directory,
+}
+
 internal sealed class CompilerInvocationCandidate
 {
     internal CompilerInvocationCandidate(
         string invocationPath,
         string environmentPath,
         Source source,
+        CompilerDiscoveryAnchor discoveryAnchor,
         bool isPrivateDirectory,
         IEnumerable<CompilerSearchDirectory>? associatedSearchDirectories = null)
         : this(
             invocationPath,
             environmentPath,
             [source],
+            discoveryAnchor,
             isPrivateDirectory,
             associatedSearchDirectories)
     {
@@ -21,6 +29,7 @@ internal sealed class CompilerInvocationCandidate
         string invocationPath,
         string environmentPath,
         IEnumerable<Source> sources,
+        CompilerDiscoveryAnchor discoveryAnchor,
         bool isPrivateDirectory,
         IEnumerable<CompilerSearchDirectory>? associatedSearchDirectories)
     {
@@ -29,6 +38,7 @@ internal sealed class CompilerInvocationCandidate
         EnvironmentPath = Path.TrimEndingDirectorySeparator(
             Path.GetFullPath(environmentPath));
         Sources = SearchPaths.Freeze(sources.Distinct().Order());
+        DiscoveryAnchor = discoveryAnchor;
         IsPrivateDirectory = isPrivateDirectory;
         AssociatedSearchDirectories = SearchPaths.Freeze(
             MergeDirectories(associatedSearchDirectories ?? []));
@@ -42,6 +52,8 @@ internal sealed class CompilerInvocationCandidate
 
     internal IReadOnlyList<Source> Sources { get; }
 
+    internal CompilerDiscoveryAnchor DiscoveryAnchor { get; }
+
     internal bool IsPrivateDirectory { get; }
 
     internal IReadOnlyList<CompilerSearchDirectory> AssociatedSearchDirectories { get; }
@@ -53,12 +65,14 @@ internal sealed class CompilerInvocationCandidate
         {
             CompilerInvocationCandidate[] ordered = group
                 .OrderBy(candidate => candidate.Sources.Min())
+                .ThenBy(candidate => candidate.DiscoveryAnchor)
                 .ToArray();
             CompilerInvocationCandidate preferred = ordered[0];
             return new CompilerInvocationCandidate(
                 preferred.InvocationPath,
                 preferred.EnvironmentPath,
                 ordered.SelectMany(candidate => candidate.Sources),
+                preferred.DiscoveryAnchor,
                 ordered.All(candidate => candidate.IsPrivateDirectory),
                 ordered.SelectMany(
                     candidate => candidate.AssociatedSearchDirectories));

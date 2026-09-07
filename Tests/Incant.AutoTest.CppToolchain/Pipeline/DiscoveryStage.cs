@@ -1,11 +1,9 @@
 using Incant.Core.Cpp;
-using Resource = Incant.Core.Cpp.FindSdk.Resource;
 using Sdk = Incant.Core.Cpp.FindSdk.Sdk;
 using SdkDiscoveryResult = Incant.Core.Cpp.FindSdk.DiscoveryResult;
 using SdkFinder = Incant.Core.Cpp.FindSdk.Finder;
 using SdkKind = Incant.Core.Cpp.FindSdk.Kind;
 using SdkQuery = Incant.Core.Cpp.FindSdk.SdkQuery;
-using TargetLayout = Incant.Core.Cpp.FindSdk.TargetLayout;
 using ToolDiscoveryResult = Incant.Core.Cpp.FindTools.DiscoveryResult;
 using ToolFinder = Incant.Core.Cpp.FindTools.Finder;
 using ToolKind = Incant.Core.Cpp.FindTools.Kind;
@@ -164,14 +162,18 @@ internal static class DiscoveryStage
             .ToArray();
         ToolSet[] explicitMatches = explicitProbe.ToolSets.ToArray();
         discovery.ToolSets.AddRange(explicitMatches);
-        CompareIdentities(
-            automaticMatches.Select(ToolIdentity),
-            explicitMatches.Select(ToolIdentity),
+        DiscoveryConsistency.ValidateExplicitToolSetInvocation(
+            discovery.Manifest.RootPath,
+            explicitMatches,
+            discovery);
+        DiscoveryConsistency.CompareToolSets(
+            automaticMatches,
+            explicitMatches,
             discovery,
             "ToolSet automatic query");
-        CompareIdentities(
-            versionMatches.Select(ToolIdentity),
-            explicitMatches.Select(ToolIdentity),
+        DiscoveryConsistency.CompareToolSets(
+            versionMatches,
+            explicitMatches,
             discovery,
             "ToolSet version query");
 
@@ -273,14 +275,19 @@ internal static class DiscoveryStage
             discovery.Failures.Add(
                 $"No {kind} SDK matched the declared installation and exact version.");
         }
-        CompareIdentities(
-            automaticMatches.Select(SdkIdentity),
-            explicitMatches.Select(SdkIdentity),
+        DiscoveryConsistency.ValidateExplicitSdkInvocation(
+            discovery.Manifest.RootPath,
+            explicitMatches,
+            discovery,
+            $"SDK {kind}");
+        DiscoveryConsistency.CompareSdks(
+            automaticMatches,
+            explicitMatches,
             discovery,
             $"SDK {kind} automatic query");
-        CompareIdentities(
-            versionMatches.Select(SdkIdentity),
-            explicitMatches.Select(SdkIdentity),
+        DiscoveryConsistency.CompareSdks(
+            versionMatches,
+            explicitMatches,
             discovery,
             $"SDK {kind} version query");
 
@@ -464,37 +471,6 @@ internal static class DiscoveryStage
         return probe;
     }
 
-    private static void CompareIdentities(
-        IEnumerable<string> broadResults,
-        IEnumerable<string> explicitResults,
-        InstallationDiscovery discovery,
-        string subject)
-    {
-        string[] broadKeys = broadResults
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(key => key, StringComparer.Ordinal)
-            .ToArray();
-        string[] explicitKeys = explicitResults
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(key => key, StringComparer.Ordinal)
-            .ToArray();
-        int missingCount = explicitKeys.Except(
-            broadKeys, StringComparer.Ordinal).Count();
-        if (missingCount > 0)
-        {
-            discovery.Failures.Add(
-                $"{subject} omitted {missingCount} identity or identities confirmed "
-                + "by explicit-root discovery.");
-            return;
-        }
-
-        int additionalCount = broadKeys.Except(
-            explicitKeys, StringComparer.Ordinal).Count();
-        discovery.Decisions.Add(
-            $"{subject} contains all {explicitKeys.Length} explicit-root identities; "
-            + $"additional identities: {additionalCount}.");
-    }
-
     private static bool SdkVersionMatches(VersionRule? rule, Sdk sdk)
     {
         if (rule is null)
@@ -507,59 +483,6 @@ internal static class DiscoveryStage
             : sdk.Version;
         return rule.Constraint.Matches(actual);
     }
-
-    private static string ToolIdentity(ToolSet toolSet) => string.Join(
-        "|",
-        toolSet.Kind,
-        PathIdentity.Normalize(toolSet.RootPath),
-        PathIdentity.Normalize(toolSet.EnvironmentPath),
-        toolSet.CompilerPath is null ? string.Empty : PathIdentity.Normalize(toolSet.CompilerPath),
-        toolSet.Version,
-        toolSet.ProductVersion,
-        toolSet.CompilerVersion,
-        CanonicalTriple(toolSet.DefaultTargetTriple),
-        toolSet.Channel);
-
-    private static string SdkIdentity(Sdk sdk) =>
-        string.Join(
-            "|",
-            sdk.Kind,
-            PathIdentity.Normalize(sdk.RootPath),
-            PathIdentity.Normalize(sdk.EnvironmentPath),
-            sdk.CompilerPath is null ? string.Empty : PathIdentity.Normalize(sdk.CompilerPath),
-            sdk.Version,
-            sdk.ProductVersion,
-            sdk.Channel,
-            string.Join(",", sdk.Layouts
-                .Select(LayoutIdentity)
-                .OrderBy(identity => identity, StringComparer.Ordinal)));
-
-    private static string LayoutIdentity(TargetLayout layout) => string.Join(
-        "/",
-        layout.Platform,
-        layout.Architecture,
-        CanonicalTriple(layout.TargetTriple),
-        layout.SysrootPath is null ? string.Empty : PathIdentity.Normalize(layout.SysrootPath),
-        layout.Multilib,
-        layout.MinimumDeploymentVersion,
-        layout.DefaultDeploymentVersion,
-        string.Join(",", layout.ApiLevels),
-        string.Join(",", layout.ApiAliases.OrderBy(alias => alias.Key)
-            .Select(alias => $"{alias.Key}:{alias.Value}")),
-        string.Join(";", layout.Resources.Select(ResourceIdentity)));
-
-    private static string ResourceIdentity(Resource resource) => string.Join(
-        ":",
-        resource.Purpose,
-        PathIdentity.Normalize(resource.Path),
-        resource.IsExternal,
-        resource.ApiLevel,
-        resource.IsDirectory);
-
-    private static string CanonicalTriple(string? triple) =>
-        string.IsNullOrWhiteSpace(triple)
-            ? string.Empty
-            : TargetTripleIdentity.Canonicalize(triple);
 
     private static bool Related(string root, ToolSet toolSet) =>
         Related(root, toolSet.RootPath)
