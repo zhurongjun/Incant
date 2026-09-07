@@ -12,7 +12,9 @@ internal sealed record CompilerSearchDirectory(string Path, bool IsPrivate);
 internal sealed record CompilerInspectionFailure(
     string Path,
     string Message,
-    IReadOnlyList<Source> Sources);
+    IReadOnlyList<Source> Sources,
+    bool TimedOut = false,
+    DiagnosticSeverity Severity = DiagnosticSeverity.Warning);
 
 internal sealed record CompilerDiscoveryResult(
     IReadOnlyList<CompilerInstallation> Installations,
@@ -85,24 +87,98 @@ internal sealed class CompilerInstallation
         DiscoveryContext context,
         CancellationToken cancellationToken)
     {
-        Task<CompilerInspection>[] tasks = CompilerInvocationCandidate.Merge(candidates)
-            .Select(candidate => InspectAsync(
-                candidate,
-                context,
-                cancellationToken))
-            .ToArray();
-        CompilerInspection[] inspections =
-            await Task.WhenAll(tasks).ConfigureAwait(false);
-        CompilerInspectionFailure[] failures = inspections
-            .Where(inspection => inspection.Failure is not null)
-            .Select(inspection => inspection.Failure!)
-            .ToArray();
-        CompilerInstallation[] installations = inspections
-            .Where(inspection => inspection.Probe is not null)
-            .GroupBy(inspection => Identity(inspection.Probe!))
-            .Select(Create)
-            .ToArray();
-        return new CompilerDiscoveryResult(installations, failures);
+        CompilerInvocationCandidate[] entries = CompilerInvocationCandidate.Merge(candidates).ToArray();
+        var inspections = new CompilerInspection[entries.Length];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, entries.Length),
+            new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken },
+            async (index, token) =>
+            {
+                inspections[index] = await InspectAsync(entries[index], context, token).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        var failures = new List<CompilerInspectionFailure>();
+        for (int index = 0; index < inspections.Length; index++)
+        {
+            CompilerInspection inspection = inspections[index];
+            if (inspection.Failure is not CompilerInspectionFailure failure)
+            {
+                continue;
+            }
+
+            failures.Add(failure);
+            if (failure.TimedOut)
+            {
+                CompilerInspection retry = await InspectAsync(entries[index], context, cancellationToken)
+                    .ConfigureAwait(false);
+                inspections[index] = retry;
+                if (retry.Failure is not null)
+                {
+                    failures.Add(retry.Failure with { Message = "Identity retry: " + retry.Failure.Message });
+                }
+                else if (retry.Probe is not null)
+                {
+                    failures.Add(new CompilerInspectionFailure(entries[index].InvocationPath,
+                        "The compiler identity was recovered by one serial retry after a timeout.",
+                        entries[index].Sources));
+                }
+            }
+        }
+
+        var groups = new List<List<CompilerInspection>>();
+        foreach (CompilerInspection inspection in inspections.Where(item => item.Probe is not null))
+        {
+            failures.AddRange(inspection.Probe!.IdentityDiagnostics.Select(outcome =>
+                new CompilerInspectionFailure(inspection.Candidate.InvocationPath,
+                    outcome.Describe(), inspection.Candidate.Sources)));
+            List<CompilerInspection>? group = groups.FirstOrDefault(items => CanJoin(items, inspection));
+            if (group is null)
+            {
+                group = [];
+                groups.Add(group);
+            }
+
+            group.Add(inspection);
+        }
+
+        return new CompilerDiscoveryResult(groups.Select(Create).ToArray(), failures.Distinct().ToArray());
+    }
+
+    private static bool CanJoin(IReadOnlyList<CompilerInspection> group, CompilerInspection candidate)
+    {
+        CompilerProbe probe = candidate.Probe!;
+        CompilerProbe first = group[0].Probe!;
+        if (probe.Family != first.Family || probe.Version != first.Version
+            || probe.DefaultTarget?.Canonical != first.DefaultTarget?.Canonical)
+        {
+            return false;
+        }
+
+        if (group.Any(item => SearchPaths.Comparer.Equals(item.Probe!.ResolvedPath, probe.ResolvedPath)))
+        {
+            return true;
+        }
+
+        CompilerName? name = CompilerName.Parse(candidate.Candidate.InvocationPath);
+        if (name is null || !name.IsTargetQualified(probe.DefaultTarget))
+        {
+            return false;
+        }
+
+        // A companion can complete one driver pair; it must not bridge unrelated C entries.
+        if (group.Any(item => CompilerName.Parse(item.Candidate.InvocationPath)?.DriverRank == name.DriverRank))
+        {
+            return false;
+        }
+
+        return group.Any(item =>
+        {
+            CompilerName? other = CompilerName.Parse(item.Candidate.InvocationPath);
+            return other is not null && name.IsCompanionOf(other)
+                && other.IsTargetQualified(item.Probe!.DefaultTarget)
+                && SearchPaths.Comparer.Equals(
+                    Path.GetDirectoryName(item.Probe!.ResolvedPath),
+                    Path.GetDirectoryName(probe.ResolvedPath));
+        });
     }
 
     private static async Task<CompilerInspection> InspectAsync(
@@ -112,10 +188,11 @@ internal sealed class CompilerInstallation
     {
         try
         {
-            CompilerProbe? probe = await CompilerProbe.OpenAsync(
+            CompilerOpenResult opened = await CompilerProbe.OpenDetailedAsync(
                 candidate.InvocationPath,
                 context,
                 cancellationToken).ConfigureAwait(false);
+            CompilerProbe? probe = opened.Probe;
             if (probe is null)
             {
                 return new CompilerInspection(
@@ -123,8 +200,9 @@ internal sealed class CompilerInstallation
                     null,
                     new CompilerInspectionFailure(
                         candidate.InvocationPath,
-                        "The compiler identity could not be established.",
-                        candidate.Sources));
+                        opened.Error ?? opened.Failure?.Describe() ?? "The compiler identity could not be established.",
+                        candidate.Sources,
+                        opened.Failure?.Status == ProbeStatus.TimedOut));
             }
 
             if (probe.DefaultTarget?.Triple.Contains(
@@ -132,6 +210,16 @@ internal sealed class CompilerInstallation
                 StringComparison.OrdinalIgnoreCase) == true)
             {
                 return new CompilerInspection(candidate, null, null);
+            }
+
+            if (candidate.DiscoveryAnchor == CompilerDiscoveryAnchor.Directory
+                && CompilerName.Parse(candidate.InvocationPath)?.IsTargetQualified(probe.DefaultTarget) is not true)
+            {
+                return new CompilerInspection(candidate, null,
+                    new CompilerInspectionFailure(candidate.InvocationPath,
+                        "Skipped automatic entry: its name prefix does not identify the reported target "
+                        + probe.DefaultTarget?.Triple + ".",
+                        candidate.Sources, Severity: DiagnosticSeverity.Info));
             }
 
             CompilerMetadata metadata = await InspectMetadataAsync(candidate, probe, context, cancellationToken)
@@ -157,7 +245,7 @@ internal sealed class CompilerInstallation
     }
 
     private static CompilerInstallation Create(
-        IGrouping<CompilerInstallationIdentity, CompilerInspection> group)
+        IEnumerable<CompilerInspection> group)
     {
         CompilerInspection[] inspections = group.ToArray();
         IOrderedEnumerable<CompilerInspection> ordered = inspections
@@ -200,27 +288,11 @@ internal sealed class CompilerInstallation
         return new CompilerInstallation(
             preferred.Candidate,
             preferred.Probe!,
-            group.Key.Family,
+            preferred.Probe!.Family,
             aliases.ToArray(),
             searchDirectories.ToArray(),
             inspections.SelectMany(inspection => inspection.Candidate.Sources).Distinct().Order().ToArray(),
             preferred.Metadata!);
-    }
-
-    private static CompilerInstallationIdentity Identity(
-        CompilerProbe probe)
-    {
-        CompilerFamily family = probe.Family;
-        string canonicalDirectory = Path.GetDirectoryName(
-            probe.ResolvedPath)!;
-        string pathKey = OperatingSystem.IsWindows()
-            ? canonicalDirectory.ToUpperInvariant()
-            : canonicalDirectory;
-        return new CompilerInstallationIdentity(
-            family,
-            pathKey,
-            probe.Version,
-            probe.DefaultTarget?.Canonical);
     }
 
     private static int DriverRank(string path) => CompilerName.Parse(path)?.DriverRank ?? 0;
@@ -309,10 +381,4 @@ internal sealed class CompilerInstallation
         CompilerProbe? Probe,
         CompilerInspectionFailure? Failure,
         CompilerMetadata? Metadata = null);
-
-    private sealed record CompilerInstallationIdentity(
-        CompilerFamily Family,
-        string CanonicalDirectory,
-        Version? Version,
-        string? DefaultTargetTriple);
 }

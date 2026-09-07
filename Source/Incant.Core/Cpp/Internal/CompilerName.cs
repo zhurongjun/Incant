@@ -7,6 +7,25 @@ internal sealed partial record CompilerName(string Prefix, string Driver, string
 {
     internal int DriverRank => Driver is "g++" or "c++" or "clang++" ? 2 : Driver == "clang-cl" ? 1 : 0;
 
+    internal bool IsTargetQualified(TargetIdentity? target)
+    {
+        if (Prefix.Length == 0)
+        {
+            return true;
+        }
+
+        var prefixTarget = new TargetIdentity(Prefix.TrimEnd('-'));
+        return target is not null
+            && prefixTarget.Architecture != TargetArchitecture.Unknown
+            && prefixTarget.Platform != TargetPlatform.Unknown
+            && prefixTarget.HasSameAbi(target);
+    }
+
+    internal bool IsCompanionOf(CompilerName other) =>
+        (Driver, other.Driver) is ("gcc", "g++") or ("g++", "gcc")
+            or ("cc", "c++") or ("c++", "cc")
+            or ("clang", "clang++") or ("clang++", "clang");
+
     internal static CompilerName? Parse(string path)
     {
         Match match = NamePattern().Match(ExecutableStem(path));

@@ -58,10 +58,7 @@ internal static class DriverArguments
     internal static IReadOnlyList<string> TargetArguments(
         ResolvedToolchain toolchain)
     {
-        string? sysroot = toolchain.Sdks
-            .OrderByDescending(component => component.Role is "platform" or "bundle")
-            .Select(component => component.Layout.SysrootPath)
-            .FirstOrDefault(path => path is not null);
+        string? sysroot = toolchain.DriverConfiguration.SysrootPath;
         var arguments = new List<string>();
         switch (toolchain.AdapterKind)
         {
@@ -80,7 +77,11 @@ internal static class DriverArguments
 
                 break;
             case BuildAdapterKind.Llvm:
-                arguments.Add("--target=" + toolchain.TargetTriple);
+                if (toolchain.DriverConfiguration.TargetTriple is string target)
+                {
+                    arguments.Add("--target=" + target);
+                }
+
                 if (sysroot is not null)
                 {
                     arguments.Add(toolchain.TargetPlatform == TargetPlatform.MacOS
@@ -94,7 +95,7 @@ internal static class DriverArguments
 
                 break;
             case BuildAdapterKind.Apple:
-                arguments.AddRange(["-target", toolchain.TargetTriple]);
+                arguments.AddRange(["-target", toolchain.DriverConfiguration.TargetTriple!]);
                 if (sysroot is not null)
                 {
                     arguments.AddRange(["-isysroot", sysroot]);
@@ -102,7 +103,7 @@ internal static class DriverArguments
 
                 break;
             case BuildAdapterKind.Android:
-                string androidTarget = toolchain.TargetTriple
+                string androidTarget = toolchain.DriverConfiguration.TargetTriple
                     + toolchain.AndroidApi!.Value.ToString(
                         System.Globalization.CultureInfo.InvariantCulture);
                 arguments.Add("--target=" + androidTarget);
@@ -113,7 +114,7 @@ internal static class DriverArguments
 
                 break;
             case BuildAdapterKind.Wasi:
-                arguments.Add("--target=" + toolchain.TargetTriple);
+                arguments.Add("--target=" + toolchain.DriverConfiguration.TargetTriple);
                 if (sysroot is not null)
                 {
                     arguments.Add("--sysroot=" + sysroot);

@@ -306,7 +306,7 @@ internal static class BundleToolchainResolver
             TargetPlatform = platform,
             TargetArchitecture = architecture,
             TargetTriple = resolvedTriple,
-            Multilib = layout.Multilib,
+            DriverConfiguration = new DriverConfiguration(resolvedTriple, layout.SysrootPath, layout.Multilib),
             AndroidApi = androidApi,
             CCompiler = cCompiler!,
             CppCompiler = cppCompiler!,

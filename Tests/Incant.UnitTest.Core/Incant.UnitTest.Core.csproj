@@ -18,5 +18,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../../Source/Incant.Core/Incant.Core.csproj" />
+    <ProjectReference Include="../Incant.ProcessTestHelper/Incant.ProcessTestHelper.csproj" />
   </ItemGroup>
 </Project>

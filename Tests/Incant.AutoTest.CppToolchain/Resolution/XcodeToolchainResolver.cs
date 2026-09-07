@@ -91,6 +91,7 @@ internal static class XcodeToolchainResolver
             ?? platformLayout.DefaultDeploymentVersion;
         string triple = AppleTargetArguments.Triple(
             platform, architecture, deploymentVersion);
+        var driver = new DriverConfiguration(triple, platformLayout.SysrootPath, null);
         Sdk? compilerSdk = await FindCompilerSdkAsync(
             context,
             owner,
@@ -98,9 +99,7 @@ internal static class XcodeToolchainResolver
             SdkKind.AppleClang,
             platform,
             architecture,
-            triple,
-            multilib: null,
-            sysrootPath,
+            driver,
             cancellationToken).ConfigureAwait(false);
         TargetLayout? compilerLayout = compilerSdk is null
             ? null
@@ -164,7 +163,7 @@ internal static class XcodeToolchainResolver
             TargetPlatform = platform,
             TargetArchitecture = architecture,
             TargetTriple = triple,
-            Multilib = compilerLayout.Multilib,
+            DriverConfiguration = driver with { Multilib = compilerLayout.Multilib },
             CCompiler = cCompiler!,
             CppCompiler = cppCompiler!,
             Archiver = archiver!,

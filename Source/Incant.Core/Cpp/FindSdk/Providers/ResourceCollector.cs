@@ -29,12 +29,12 @@ internal sealed class ResourceCollector
     internal void Add(ResourcePurpose purpose, string path, int? apiLevel = null)
     {
         bool isFile = purpose is ResourcePurpose.Library or ResourcePurpose.Startup;
-        if (!(isFile ? File.Exists(path) : Directory.Exists(path)))
+        string normalized = SearchPaths.Normalize(path);
+        if (!(isFile ? File.Exists(normalized) : Directory.Exists(normalized)))
         {
             return;
         }
 
-        string normalized = SearchPaths.Normalize(path);
         if (!_entries.Any(entry => entry.Purpose == purpose && entry.ApiLevel == apiLevel
             && SearchPaths.Comparer.Equals(entry.Path, normalized)))
         {

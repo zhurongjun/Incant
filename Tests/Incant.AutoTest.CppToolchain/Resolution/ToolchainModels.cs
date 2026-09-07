@@ -70,7 +70,9 @@ internal sealed class ResolvedToolchain
 
     internal required string TargetTriple { get; init; }
 
-    internal string? Multilib { get; init; }
+    internal required DriverConfiguration DriverConfiguration { get; init; }
+
+    internal string? Multilib => DriverConfiguration.Multilib;
 
     internal int? AndroidApi { get; init; }
 

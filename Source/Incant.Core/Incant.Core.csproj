@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../Shared/FileSystemPath.cs" Link="Internal/FileSystemPath.cs" />
     <ProjectReference Include="../Incant.Base/Incant.Base.csproj" />
   </ItemGroup>
 </Project>

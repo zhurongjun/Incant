@@ -134,6 +134,7 @@ internal static class NativeToolchainResolver
                             continue;
                         }
 
+                        DriverConfiguration driver = DriverConfiguration.Native(platform, compilerLayout, platformLayout);
                         Sdk? selectedCompilerSdk = await FindCompilerSdkAsync(
                             context,
                             owner,
@@ -141,9 +142,7 @@ internal static class NativeToolchainResolver
                             compilerKind,
                             platform,
                             compilerLayout.Architecture,
-                            triple,
-                            compilerLayout.Multilib,
-                            platformLayout.SysrootPath,
+                            driver,
                             cancellationToken).ConfigureAwait(false);
                         TargetLayout? selectedCompilerLayout = selectedCompilerSdk is null
                             ? null
@@ -244,7 +243,7 @@ internal static class NativeToolchainResolver
                             TargetPlatform = platform,
                             TargetArchitecture = compilerLayout.Architecture,
                             TargetTriple = triple,
-                            Multilib = selectedCompilerLayout.Multilib,
+                            DriverConfiguration = driver,
                             CCompiler = cCompiler!,
                             CppCompiler = cppCompiler!,
                             Archiver = archiver!,
@@ -306,7 +305,7 @@ internal static class NativeToolchainResolver
                 .FirstOrDefault();
         }
 
-        string? triple = compilerLayout.TargetTriple ?? toolSet.DefaultTargetTriple;
+        DriverConfiguration driver = DriverConfiguration.Native(platform, compilerLayout);
         var query = new SdkQuery
         {
             Kind = SdkKind.Linux,
@@ -314,8 +313,9 @@ internal static class NativeToolchainResolver
             CompilerPath = toolSet.CompilerPath,
             TargetPlatform = platform,
             TargetArchitecture = compilerLayout.Architecture,
-            TargetTriple = triple,
-            Multilib = compilerLayout.Multilib,
+            TargetTriple = driver.TargetTriple,
+            SysrootPath = driver.SysrootPath,
+            Multilib = driver.Multilib,
             IncludePreview = true,
             Environment = context.EnvironmentFor(compilerOwner.Manifest),
         };

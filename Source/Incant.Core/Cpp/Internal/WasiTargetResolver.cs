@@ -54,7 +54,9 @@ internal static partial class WasiTargetResolver
         foreach (string candidate in candidates.Distinct(StringComparer.Ordinal))
         {
             if (Directory.Exists(Path.Combine(sysroot, "usr", "lib", candidate))
-                || Directory.Exists(Path.Combine(sysroot, "lib", candidate)))
+                || Directory.Exists(Path.Combine(sysroot, "lib", candidate))
+                || Directory.Exists(Path.Combine(sysroot, "include", candidate))
+                || Directory.Exists(Path.Combine(sysroot, "usr", "include", candidate)))
             {
                 return candidate;
             }

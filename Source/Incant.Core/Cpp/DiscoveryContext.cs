@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using Incant.Base;
 
 namespace Incant.Core.Cpp;
@@ -62,7 +63,7 @@ public sealed class DiscoveryContext
 
     /// <summary>
     /// Runs a read-only executable entry directly in the captured environment with a fixed English locale.
-    /// A nonzero exit or timeout returns null. Cancellation propagates. The operating system may honor an entry's launcher format; no implicit command shell is inserted.
+    /// A nonzero exit, timeout or process start failure returns null. Cancellation propagates. The operating system may honor an entry's launcher format; no implicit command shell is inserted.
     /// </summary>
     public async Task<ProcessResult?> ProbeAsync(
         string executablePath,
@@ -70,6 +71,19 @@ public sealed class DiscoveryContext
         CancellationToken cancellationToken = default,
         IReadOnlyDictionary<string, string?>? overrides = null)
     {
+        ProbeOutcome outcome = await ProbeDetailedAsync(
+            executablePath, arguments, cancellationToken, overrides).ConfigureAwait(false);
+        return outcome.Status == ProbeStatus.Success ? outcome.Result : null;
+    }
+
+    internal async Task<ProbeOutcome> ProbeDetailedAsync(
+        string executablePath,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, string?>? overrides = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        string[] argumentSnapshot = arguments.ToArray();
         var environment = new Dictionary<string, string?>(SearchPaths.Comparer);
         foreach (DictionaryEntry entry in System.Environment.GetEnvironmentVariables())
         {
@@ -92,19 +106,22 @@ public sealed class DiscoveryContext
         environment["LC_ALL"] = "C";
         environment["LANG"] = "C";
 
+        long started = Stopwatch.GetTimestamp();
         try
         {
-            ProcessResult result = await Misc.RunProcessAsync(executablePath, arguments, new ProcessOptions
+            ProcessResult result = await Misc.RunProcessAsync(executablePath, argumentSnapshot, new ProcessOptions
             {
                 Environment = environment,
                 Timeout = ProbeTimeout,
                 EnsureUnixExecutablePermission = false,
             }, cancellationToken).ConfigureAwait(false);
-            return result.IsSuccess ? result : null;
+            return new ProbeOutcome(executablePath, argumentSnapshot, result, result.Elapsed);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or Win32Exception)
         {
-            return null;
+            cancellationToken.ThrowIfCancellationRequested();
+            return new ProbeOutcome(executablePath, argumentSnapshot, null,
+                Stopwatch.GetElapsedTime(started), exception.Message);
         }
     }
 }

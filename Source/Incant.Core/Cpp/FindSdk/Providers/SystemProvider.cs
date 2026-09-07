@@ -125,8 +125,15 @@ public sealed class SystemProvider : IDiscoveryProvider
         {
             bool isNativeRoot = root == "/";
             bool hasForeignLibc = TargetResources.HasForeignLibc(target);
-            string? libc = await target.FindFileAsync("libc.so", cancellationToken).ConfigureAwait(false)
-                ?? await target.FindFileAsync("libc.a", cancellationToken).ConfigureAwait(false);
+            async Task<string?> FindFileAsync(string name)
+            {
+                CompilerFileResult file = await target.FindFileAsync(name, cancellationToken).ConfigureAwait(false);
+                diagnostics.AddRange(file.Diagnostics);
+                return file.Path;
+            }
+
+            string? libc = await FindFileAsync("libc.so").ConfigureAwait(false)
+                ?? await FindFileAsync("libc.a").ConfigureAwait(false);
             bool hasLibcEvidence = libc is not null && TargetResources.IsCompatibleFile(libc, target, hasForeignLibc);
             foreach (CompilerInclude include in target.Includes)
             {
@@ -173,7 +180,7 @@ public sealed class SystemProvider : IDiscoveryProvider
 
             foreach (string name in new[] { "libc.so", "libc.a", "crt1.o", "Scrt1.o", "rcrt1.o", "crti.o", "crtn.o" })
             {
-                string? path = await target.FindFileAsync(name, cancellationToken).ConfigureAwait(false);
+                string? path = await FindFileAsync(name).ConfigureAwait(false);
                 if (path is not null && SearchPaths.Contains(root, path) && TargetResources.IsCompatibleFile(path, target, hasForeignLibc))
                 {
                     collector.Add(TargetResources.IsStartup(path) ? ResourcePurpose.Startup : ResourcePurpose.Library, path);

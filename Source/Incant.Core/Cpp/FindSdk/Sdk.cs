@@ -105,7 +105,7 @@ public sealed class Sdk
             throw new ArgumentException("SDK resource paths must be absolute.", nameof(path));
         }
 
-        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        return Path.TrimEndingDirectorySeparator(Incant.Internal.FileSystemPath.Absolute(path));
     }
 }
 

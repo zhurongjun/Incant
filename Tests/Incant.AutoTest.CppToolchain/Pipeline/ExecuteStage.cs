@@ -33,8 +33,7 @@ internal static class ExecuteStage
             SerialBuildScheduler.DeleteSuccessfulWork(context, candidate);
         }
 
-        bool coverage = ToolchainCoverage.Evaluate(context, completed: true);
-        return coverage && context.CandidatesSatisfy(
+        return context.CandidatesSatisfy(
             candidates,
             candidate => candidate.Status == CandidateStatus.Passed);
     }

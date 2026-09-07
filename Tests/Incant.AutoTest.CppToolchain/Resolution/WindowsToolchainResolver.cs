@@ -92,7 +92,7 @@ internal static class WindowsToolchainResolver
         string id = CreateId("msvc-inputs", owner.Requirement.Id, architecture);
         var candidate = new ToolchainCandidate(id, [owner.Requirement.Id], owner.Managed);
         Sdk? sdk = await FindCompilerSdkAsync(context, owner, toolSet, SdkKind.Msvc,
-            TargetPlatform.Windows, architecture, null, null, null, cancellationToken).ConfigureAwait(false);
+            TargetPlatform.Windows, architecture, new DriverConfiguration(null, null, null), cancellationToken).ConfigureAwait(false);
         TargetLayout? layout = sdk is null ? null : FindLayout(sdk, TargetPlatform.Windows, architecture);
         if (sdk is null || layout is null || !BuildInputs.MsvcSdk(layout))
         {
@@ -144,6 +144,7 @@ internal static class WindowsToolchainResolver
             TargetPlatform = TargetPlatform.Windows,
             TargetArchitecture = architecture,
             TargetTriple = WindowsTriple(architecture),
+            DriverConfiguration = new DriverConfiguration(null, null, null),
             CCompiler = input.Compiler!,
             CppCompiler = input.Compiler!,
             Archiver = input.Archiver!,
@@ -183,8 +184,9 @@ internal static class WindowsToolchainResolver
                     }
 
                     string triple = WindowsTriple(architecture);
+                    var driver = new DriverConfiguration(triple, null, null);
                     Sdk? compilerSdk = await FindCompilerSdkAsync(context, owner, toolSet, SdkKind.Llvm,
-                        TargetPlatform.Windows, architecture, triple, null, null, cancellationToken).ConfigureAwait(false);
+                        TargetPlatform.Windows, architecture, driver, cancellationToken).ConfigureAwait(false);
                     TargetLayout? compilerLayout = compilerSdk is null ? null
                         : FindLayout(compilerSdk, TargetPlatform.Windows, architecture);
                     if (compilerSdk is null || compilerLayout is null)
@@ -224,6 +226,7 @@ internal static class WindowsToolchainResolver
                         TargetPlatform = TargetPlatform.Windows,
                         TargetArchitecture = architecture,
                         TargetTriple = triple,
+                        DriverConfiguration = driver,
                         CCompiler = compiler!,
                         CppCompiler = compiler!,
                         Archiver = archiver!,

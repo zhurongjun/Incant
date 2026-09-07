@@ -13,7 +13,7 @@ internal static partial class SearchPaths
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException or NotSupportedException)
         {
-            return Path.GetFullPath(path);
+            return Incant.Internal.FileSystemPath.Absolute(path);
         }
     }
 
@@ -29,26 +29,8 @@ internal static partial class SearchPaths
     internal static StringComparer Comparer =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
-    internal static string Normalize(string path)
-    {
-        string fullPath = Path.GetFullPath(path);
-        string root = Path.GetPathRoot(fullPath)!;
-        string current = root;
-        foreach (string part in fullPath[root.Length..].Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries))
-        {
-            current = Path.Combine(current, part);
-            FileSystemInfo? info = Directory.Exists(current) ? new DirectoryInfo(current)
-                : File.Exists(current) ? new FileInfo(current) : null;
-            if (info is not null)
-            {
-                current = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? current;
-            }
-        }
-
-        return Path.TrimEndingDirectorySeparator(current);
-    }
+    internal static string Normalize(string path) =>
+        Incant.Internal.FileSystemPath.Resolve(path);
 
     internal static bool Contains(string root, string path)
     {
@@ -75,7 +57,23 @@ internal static partial class SearchPaths
         string[] suffixes = OperatingSystem.IsWindows()
             ? wrappers ? [".exe", ".bat", ".cmd", ".py", ""] : [".exe", ""]
             : wrappers ? ["", ".py"] : [""];
-        return suffixes.Select(suffix => Path.Combine(directory, name + suffix)).FirstOrDefault(File.Exists);
+        foreach (string suffix in suffixes)
+        {
+            string path = Path.Combine(directory, name + suffix);
+            try
+            {
+                if (File.Exists(Normalize(path)))
+                {
+                    return path;
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // An invalid link cannot supply this tool; other entry names remain eligible.
+            }
+        }
+
+        return null;
     }
 
     internal static string? OnPath(DiscoveryContext context, string name) =>

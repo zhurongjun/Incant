@@ -428,18 +428,20 @@ internal static partial class CompilerLocator
     {
         cancellationToken.ThrowIfCancellationRequested();
         string fullRoot;
+        string resolvedRoot;
         try
         {
-            fullRoot = Path.GetFullPath(root);
+            fullRoot = Incant.Internal.FileSystemPath.Absolute(root);
+            resolvedRoot = SearchPaths.Normalize(fullRoot);
         }
         catch (Exception exception) when (exception is ArgumentException
             or NotSupportedException
-            or PathTooLongException)
+            or IOException or UnauthorizedAccessException)
         {
             return;
         }
 
-        if (File.Exists(fullRoot))
+        if (File.Exists(resolvedRoot))
         {
             string bin = Path.GetDirectoryName(fullRoot)!;
             candidates.Add(new CompilerInvocationCandidate(
@@ -452,7 +454,7 @@ internal static partial class CompilerLocator
             return;
         }
 
-        if (!Directory.Exists(fullRoot))
+        if (!Directory.Exists(resolvedRoot))
         {
             return;
         }
@@ -463,7 +465,7 @@ internal static partial class CompilerLocator
             StringComparison.OrdinalIgnoreCase)
             ? [fullRoot]
             : [fullRoot, Path.Combine(fullRoot, "bin")];
-        foreach (string directory in directories.Where(Directory.Exists))
+        foreach (string directory in directories)
         {
             bool privateDirectory = isPrivate ?? !IsSharedDirectory(directory);
             string environment = string.Equals(
@@ -492,7 +494,8 @@ internal static partial class CompilerLocator
     {
         try
         {
-            return SearchPaths.Directories(path).ToArray();
+            return SearchPaths.Directories(SearchPaths.Normalize(path))
+                .Select(directory => Path.Combine(path, Path.GetFileName(directory))).ToArray();
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException)
@@ -505,7 +508,8 @@ internal static partial class CompilerLocator
     {
         try
         {
-            return SearchPaths.Files(path).ToArray();
+            return SearchPaths.Files(SearchPaths.Normalize(path))
+                .Select(file => Path.Combine(path, Path.GetFileName(file))).ToArray();
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException)

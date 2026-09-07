@@ -58,12 +58,7 @@ public sealed class BundleProvider : IDiscoveryProvider
             {
                 string targetTriple = installation.TargetTriple
                     ?? WasiTargetResolver.Preview1Triple;
-                string resourceTriple = WasiTargetResolver.ResolveResourceTriple(
-                    installation.Sysroot, targetTriple);
-                IReadOnlyList<Resource> resources = Resources.Sysroot(
-                    installation.Sysroot, resourceTriple);
-                layouts.Add(new TargetLayout(TargetPlatform.Wasi, TargetArchitecture.Wasm32, resources, targetTriple,
-                    installation.Sysroot, diagnostics: MissingGroups(resources, installation.Sysroot)));
+                layouts.Add(WasiResourceLayout.Create(installation.Sysroot, targetTriple));
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)

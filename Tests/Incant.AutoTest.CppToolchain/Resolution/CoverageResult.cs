@@ -8,12 +8,11 @@ internal sealed record CoverageResult(string Requirement, bool Passed, IReadOnly
 
 internal static class ToolchainCoverage
 {
-    internal static bool Evaluate(AutoTestContext context, bool completed)
+    internal static bool Evaluate(AutoTestContext context)
     {
         context.Coverage.Clear();
-        bool Satisfies(ToolchainCandidate candidate) => completed
-            ? candidate.Status == CandidateStatus.Passed
-            : candidate.Status == CandidateStatus.Resolved;
+        static bool Satisfies(ToolchainCandidate candidate) =>
+            candidate.Status == CandidateStatus.Passed;
 
         foreach (InstallationRequirement requirement in context.Profile.Installations.Where(item => item.Required))
         {

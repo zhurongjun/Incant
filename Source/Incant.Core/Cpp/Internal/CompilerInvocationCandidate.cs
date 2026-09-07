@@ -33,10 +33,10 @@ internal sealed class CompilerInvocationCandidate
         bool isPrivateDirectory,
         IEnumerable<CompilerSearchDirectory>? associatedSearchDirectories = null)
     {
-        InvocationPath = Path.GetFullPath(invocationPath);
+        InvocationPath = Incant.Internal.FileSystemPath.Absolute(invocationPath);
         CanonicalPath = SearchPaths.InvocationIdentity(invocationPath);
         EnvironmentPath = Path.TrimEndingDirectorySeparator(
-            Path.GetFullPath(environmentPath));
+            Incant.Internal.FileSystemPath.Absolute(environmentPath));
         Sources = SearchPaths.Freeze(sources.Distinct().Order());
         DiscoveryAnchor = discoveryAnchor;
         IsPrivateDirectory = isPrivateDirectory;
@@ -91,7 +91,7 @@ internal sealed class CompilerInvocationCandidate
         IEnumerable<CompilerSearchDirectory> directories) => directories
         .Select(directory => new CompilerSearchDirectory(
             Path.TrimEndingDirectorySeparator(
-                Path.GetFullPath(directory.Path)),
+                Incant.Internal.FileSystemPath.Absolute(directory.Path)),
             directory.IsPrivate))
         .GroupBy(directory => directory.Path, SearchPaths.Comparer)
         .Select(group => new CompilerSearchDirectory(

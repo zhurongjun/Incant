@@ -59,6 +59,11 @@ internal sealed class SerialTestPipeline(IReadOnlyList<PipelineStage> stages)
                 result.Elapsed = Stopwatch.GetElapsedTime(started);
             }
         }
+
+        if (!context.IsFatal && !canceled && !ToolchainCoverage.Evaluate(context))
+        {
+            context.RecordTestFailure();
+        }
     }
 
     private static PipelineStage CreateStage(PipelineStageKind kind) => kind switch

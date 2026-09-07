@@ -18,7 +18,8 @@ internal sealed class CompilerProbe
         string identityText,
         string? defaultTriple,
         Version? version,
-        CompilerFamily family)
+        CompilerFamily family,
+        IReadOnlyList<ProbeOutcome> identityDiagnostics)
     {
         Path = path;
         _probePath = probePath;
@@ -27,6 +28,7 @@ internal sealed class CompilerProbe
         _context = context;
         IdentityText = identityText;
         Family = family;
+        IdentityDiagnostics = identityDiagnostics;
         DefaultTarget = string.IsNullOrWhiteSpace(defaultTriple)
             ? null
             : new TargetIdentity(defaultTriple.Trim());
@@ -39,6 +41,8 @@ internal sealed class CompilerProbe
     internal string IdentityText { get; }
 
     internal CompilerFamily Family { get; }
+
+    internal IReadOnlyList<ProbeOutcome> IdentityDiagnostics { get; }
 
     internal bool IsClang => Family is CompilerFamily.Llvm or CompilerFamily.AppleClang;
 
@@ -54,6 +58,12 @@ internal sealed class CompilerProbe
     internal static async Task<CompilerProbe?> OpenAsync(
         string path,
         DiscoveryContext context,
+        CancellationToken cancellationToken) =>
+        (await OpenDetailedAsync(path, context, cancellationToken).ConfigureAwait(false)).Probe;
+
+    internal static async Task<CompilerOpenResult> OpenDetailedAsync(
+        string path,
+        DiscoveryContext context,
         CancellationToken cancellationToken)
     {
         string probePath = path;
@@ -67,7 +77,7 @@ internal sealed class CompilerProbe
                     cancellationToken).ConfigureAwait(false);
             if (resolution.ResolvedCompilerPath is null)
             {
-                return null;
+                return new CompilerOpenResult(null, Error: "The Apple developer environment could not be resolved.");
             }
 
             resolvedPath = resolution.ResolvedCompilerPath;
@@ -83,33 +93,43 @@ internal sealed class CompilerProbe
             }
         }
 
-        ProcessResult? identity = await context.ProbeAsync(
-            probePath,
-            ["--version"],
-            cancellationToken).ConfigureAwait(false);
-        if (identity is null)
+        ProbeOutcome identityOutcome = await context.ProbeDetailedAsync(
+            probePath, ["--version"], cancellationToken).ConfigureAwait(false);
+        if (identityOutcome.Status != ProbeStatus.Success)
         {
-            return null;
+            return new CompilerOpenResult(null, identityOutcome);
         }
 
-        ProcessResult? machine = await context.ProbeAsync(
-            probePath,
-            ["-dumpmachine"],
-            cancellationToken).ConfigureAwait(false);
+        ProcessResult identity = identityOutcome.Result!;
+
         string text = identity.StandardOutput + identity.StandardError;
         CompilerFamily? family = Classify(text);
         if (family is null)
         {
+            return new CompilerOpenResult(null, identityOutcome,
+                identityOutcome.Describe("UnrecognizedIdentity"));
+        }
+
+        var identityDiagnostics = new List<ProbeOutcome>();
+        async Task<ProcessResult?> InspectIdentityDetailAsync(params string[] arguments)
+        {
+            ProbeOutcome outcome = await context.ProbeDetailedAsync(probePath, arguments, cancellationToken)
+                .ConfigureAwait(false);
+            if (outcome.Status == ProbeStatus.Success)
+            {
+                return outcome.Result;
+            }
+
+            identityDiagnostics.Add(outcome);
             return null;
         }
 
+        ProcessResult? machine = await InspectIdentityDetailAsync("-dumpmachine").ConfigureAwait(false);
         Version? version = SearchPaths.CompilerVersion(text);
         if (family == CompilerFamily.Gnu)
         {
-            ProcessResult? reportedVersion = await context.ProbeAsync(
-                probePath,
-                ["-dumpfullversion", "-dumpversion"],
-                cancellationToken).ConfigureAwait(false);
+            ProcessResult? reportedVersion = await InspectIdentityDetailAsync("-dumpfullversion", "-dumpversion")
+                .ConfigureAwait(false);
             version = SearchPaths.Version(reportedVersion?.StandardOutput) ?? version;
         }
 
@@ -123,7 +143,7 @@ internal sealed class CompilerProbe
             defaultTriple = targetLine?["Target:".Length..].Trim();
         }
 
-        return new CompilerProbe(
+        return new CompilerOpenResult(new CompilerProbe(
             path,
             probePath,
             resolvedPath,
@@ -131,7 +151,8 @@ internal sealed class CompilerProbe
             text,
             defaultTriple,
             version,
-            family.Value);
+            family.Value,
+            identityDiagnostics.ToArray()));
     }
 
     private static CompilerFamily? Classify(string identity) =>
@@ -198,11 +219,12 @@ internal sealed class CompilerProbe
             }
         }
 
-        Task<CompilerTarget?>[] tasks = variants
+        Task<CompilerTargets>[] tasks = variants
             .Where(variant => query.Multilib is null || IsClang || variant.Name == query.Multilib)
             .Select(variant => InspectTargetAsync(query, variant.Name, variant.Flags, cancellationToken)).ToArray();
-        CompilerTarget?[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
-        CompilerTarget[] targets = results.OfType<CompilerTarget>().ToArray();
+        CompilerTargets[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        CompilerTarget[] targets = results.SelectMany(result => result.Targets).ToArray();
+        diagnostics.AddRange(results.SelectMany(result => result.Diagnostics));
         if (targets.Length == 0)
         {
             diagnostics.Add(Missing("The requested target or multilib could not be established from this compiler.", Path));
@@ -211,9 +233,10 @@ internal sealed class CompilerProbe
         return new CompilerTargets(targets, diagnostics);
     }
 
-    private async Task<CompilerTarget?> InspectTargetAsync(
+    private async Task<CompilerTargets> InspectTargetAsync(
         SdkQuery query, string? multilib, string[] variantFlags, CancellationToken cancellationToken)
     {
+        var diagnostics = new List<Diagnostic>();
         var arguments = new List<string>(variantFlags);
         if (IsClang && query.TargetTriple is not null)
         {
@@ -241,7 +264,20 @@ internal sealed class CompilerProbe
                 arguments.Concat(flags).ToArray(),
                 cancellationToken).ConfigureAwait(false);
 
-        ProcessResult? macros = await ProbeAsync("-dM", "-E", "-x", "c", NullInput).ConfigureAwait(false);
+        async Task<ProcessResult?> RequiredProbeAsync(params string[] flags)
+        {
+            ProbeOutcome outcome = await _context.ProbeDetailedAsync(_probePath,
+                arguments.Concat(flags).ToArray(), cancellationToken).ConfigureAwait(false);
+            if (outcome.Status == ProbeStatus.Success)
+            {
+                return outcome.Result;
+            }
+
+            diagnostics.Add(Missing(outcome.Describe(), Path));
+            return null;
+        }
+
+        ProcessResult? macros = await RequiredProbeAsync("-dM", "-E", "-x", "c", NullInput).ConfigureAwait(false);
         TargetArchitecture architecture = MacroArchitecture(macros?.StandardOutput);
         bool isX32 = architecture == TargetArchitecture.X64
             && (macros?.StandardOutput.Contains("#define __ILP32__", StringComparison.Ordinal) ?? false);
@@ -255,7 +291,7 @@ internal sealed class CompilerProbe
 
         if (triple is null)
         {
-            return null;
+            return new CompilerTargets([], diagnostics);
         }
 
         var target = new TargetIdentity(triple);
@@ -266,14 +302,14 @@ internal sealed class CompilerProbe
         else if (variantFlags.Length > 0 || IsClang && query.TargetTriple is not null
             && !TargetIdentity.AreEquivalent(query.TargetTriple, DefaultTarget?.Triple))
         {
-            return null;
+            return new CompilerTargets([], diagnostics);
         }
 
         if (query.TargetArchitecture is not null && query.TargetArchitecture != target.Architecture
             || query.TargetPlatform is not null && query.TargetPlatform != target.Platform
             || query.TargetTriple is not null && !TargetIdentity.AreEquivalent(query.TargetTriple, target.Triple))
         {
-            return null;
+            return new CompilerTargets([], diagnostics);
         }
 
         string? multiarch = (await ProbeAsync("-print-multiarch").ConfigureAwait(false))?.StandardOutput.Trim();
@@ -287,7 +323,7 @@ internal sealed class CompilerProbe
         {
             if (query.Multilib is not null && query.Multilib != reportedMultilib)
             {
-                return null;
+                return new CompilerTargets([], diagnostics);
             }
 
             multilib = string.IsNullOrWhiteSpace(reportedMultilib) ? null : reportedMultilib;
@@ -304,16 +340,41 @@ internal sealed class CompilerProbe
             sysroot = null;
         }
 
-        var diagnostics = new List<Diagnostic>();
-        if (macros is null)
+        string? ExistingDirectory(string? path)
         {
-            diagnostics.Add(Missing("The target preprocessor query failed.", Path));
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return null;
+            }
+
+            if (!System.IO.Path.IsPathFullyQualified(path))
+            {
+                diagnostics.Add(Missing($"The driver reported a non-absolute resource path: {path}", Path));
+                return null;
+            }
+
+            try
+            {
+                string normalized = SearchPaths.Normalize(path);
+                if (Directory.Exists(normalized))
+                {
+                    return normalized;
+                }
+
+                diagnostics.Add(Missing($"The reported resource path does not exist after resolution: {normalized}", path));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                diagnostics.Add(Missing(exception.Message, path));
+            }
+
+            return null;
         }
 
         var includes = new List<CompilerInclude>();
         foreach (string language in new[] { "c", "c++" })
         {
-            ProcessResult? search = await ProbeAsync("-E", "-x", language, "-v", NullInput).ConfigureAwait(false);
+            ProcessResult? search = await RequiredProbeAsync("-E", "-x", language, "-v", NullInput).ConfigureAwait(false);
             bool isInSearch = false;
             int startCount = includes.Count;
             foreach (string line in (search?.StandardError + search?.StandardOutput).Split('\n'))
@@ -331,9 +392,9 @@ internal sealed class CompilerProbe
                 {
                     bool isFramework = value.EndsWith(" (framework directory)", StringComparison.Ordinal);
                     string path = value.Replace(" (framework directory)", "", StringComparison.Ordinal);
-                    if (System.IO.Path.IsPathFullyQualified(path) && Directory.Exists(path))
+                    if (ExistingDirectory(path) is string normalized)
                     {
-                        includes.Add(new CompilerInclude(SearchPaths.Normalize(path),
+                        includes.Add(new CompilerInclude(normalized,
                             isFramework ? ResourcePurpose.Framework : language == "c" ? ResourcePurpose.CInclude : ResourcePurpose.CppInclude));
                     }
                 }
@@ -345,24 +406,22 @@ internal sealed class CompilerProbe
             }
         }
 
-        ProcessResult? searchDirectories = await ProbeAsync("-print-search-dirs").ConfigureAwait(false);
+        ProcessResult? searchDirectories = await RequiredProbeAsync("-print-search-dirs").ConfigureAwait(false);
         string? libraries = searchDirectories?.StandardOutput.Split('\n')
             .FirstOrDefault(line => line.StartsWith("libraries:", StringComparison.Ordinal));
         string[] directories = libraries is null ? [] : libraries["libraries:".Length..].Trim().TrimStart('=')
             .Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Where(System.IO.Path.IsPathFullyQualified).Where(Directory.Exists).Select(SearchPaths.Normalize)
+            .Select(path => ExistingDirectory(path)).OfType<string>()
             .Distinct(SearchPaths.Comparer).ToArray();
 
         string? resource = IsClang
-            ? (await ProbeAsync("-print-resource-dir").ConfigureAwait(false))?.StandardOutput.Trim()
-            : (await ProbeAsync("-print-file-name=include").ConfigureAwait(false))?.StandardOutput.Trim();
-        if (resource is not null && (!System.IO.Path.IsPathFullyQualified(resource) || !Directory.Exists(resource)))
-        {
-            resource = null;
-        }
+            ? (await RequiredProbeAsync("-print-resource-dir").ConfigureAwait(false))?.StandardOutput.Trim()
+            : (await RequiredProbeAsync("-print-file-name=include").ConfigureAwait(false))?.StandardOutput.Trim();
+        resource = ExistingDirectory(resource);
 
-        return new CompilerTarget(this, target, arguments.ToArray(), multilib, multiarch, sysroot,
-            resource, includes, directories, diagnostics);
+        return new CompilerTargets(
+            [new CompilerTarget(this, target, arguments.ToArray(), multilib, multiarch, sysroot,
+                resource, includes, directories, diagnostics)], []);
     }
 
     internal Task<ProcessResult?> RunAsync(
@@ -372,6 +431,10 @@ internal sealed class CompilerProbe
             _probePath,
             arguments,
             cancellationToken);
+
+    internal Task<ProbeOutcome> RunDetailedAsync(
+        IReadOnlyList<string> arguments, CancellationToken cancellationToken) =>
+        _context.ProbeDetailedAsync(_probePath, arguments, cancellationToken);
 
     internal static string NullInput => OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
 
@@ -409,14 +472,38 @@ internal sealed record CompilerTarget(
     IReadOnlyList<string> LibraryDirectories,
     IReadOnlyList<Diagnostic> Diagnostics)
 {
-    internal Task<ProcessResult?> ProbeAsync(string argument, CancellationToken cancellationToken) =>
-        Compiler.RunAsync(Arguments.Append(argument).ToArray(), cancellationToken);
-
-    internal async Task<string?> FindFileAsync(string name, CancellationToken cancellationToken)
+    internal async Task<CompilerFileResult> FindFileAsync(string name, CancellationToken cancellationToken)
     {
-        ProcessResult? result = await ProbeAsync("-print-file-name=" + name, cancellationToken).ConfigureAwait(false);
-        string? path = result?.StandardOutput.Trim();
-        return path is not null && System.IO.Path.IsPathFullyQualified(path) && File.Exists(path)
-            ? SearchPaths.Normalize(path) : null;
+        ProbeOutcome outcome = await Compiler.RunDetailedAsync(
+            Arguments.Append("-print-file-name=" + name).ToArray(), cancellationToken).ConfigureAwait(false);
+        if (outcome.Status != ProbeStatus.Success)
+        {
+            return new CompilerFileResult(null, [CompilerProbe.Missing(outcome.Describe(), Compiler.Path)]);
+        }
+
+        string? path = outcome.Result?.StandardOutput.Trim();
+        if (string.IsNullOrWhiteSpace(path) || path == name)
+        {
+            return new CompilerFileResult(null, []);
+        }
+
+        if (!System.IO.Path.IsPathFullyQualified(path))
+        {
+            return new CompilerFileResult(null,
+                [CompilerProbe.Missing($"The driver reported a non-absolute file path: {path}", Compiler.Path)]);
+        }
+
+        try
+        {
+            string normalized = SearchPaths.Normalize(path);
+            return File.Exists(normalized)
+                ? new CompilerFileResult(normalized, [])
+                : new CompilerFileResult(null,
+                    [CompilerProbe.Missing($"The reported file does not exist after resolution: {normalized}", path)]);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return new CompilerFileResult(null, [CompilerProbe.Missing(exception.Message, path)]);
+        }
     }
 }

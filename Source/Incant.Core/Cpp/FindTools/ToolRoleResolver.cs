@@ -364,14 +364,14 @@ internal static class ToolRoleResolver
         {
             string path = Path.IsPathFullyQualified(value)
                 ? value
-                : Path.GetFullPath(value, compilerDirectory);
-            return File.Exists(path)
+                : Incant.Internal.FileSystemPath.Absolute(Path.Combine(compilerDirectory, value));
+            return File.Exists(SearchPaths.Normalize(path))
                 ? path
                 : null;
         }
         catch (Exception exception) when (exception is ArgumentException
             or NotSupportedException
-            or PathTooLongException)
+            or IOException or UnauthorizedAccessException)
         {
             return null;
         }

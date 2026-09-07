@@ -13,7 +13,7 @@ internal static class PathIdentity
     internal static string Normalize(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        string fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        string fullPath = Incant.Internal.FileSystemPath.Absolute(path);
         return s_normalizedPaths.GetOrAdd(fullPath, ResolveLinks);
     }
 
@@ -39,30 +39,6 @@ internal static class PathIdentity
     internal static bool Related(string left, string right) =>
         Contains(left, right) || Contains(right, left);
 
-    private static string ResolveLinks(string fullPath)
-    {
-        string root = Path.GetPathRoot(fullPath)
-            ?? throw new ArgumentException(
-                $"Path '{fullPath}' has no filesystem root.",
-                nameof(fullPath));
-        string current = root;
-        foreach (string component in fullPath[root.Length..].Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries))
-        {
-            current = Path.Combine(current, component);
-            FileSystemInfo? information = Directory.Exists(current)
-                ? new DirectoryInfo(current)
-                : File.Exists(current)
-                    ? new FileInfo(current)
-                    : null;
-            if (information is not null)
-            {
-                current = information.ResolveLinkTarget(returnFinalTarget: true)?.FullName
-                    ?? current;
-            }
-        }
-
-        return Path.TrimEndingDirectorySeparator(current);
-    }
+    private static string ResolveLinks(string path) =>
+        Incant.Internal.FileSystemPath.Resolve(path);
 }

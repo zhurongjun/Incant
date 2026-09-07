@@ -68,8 +68,9 @@ public sealed class CompilerProvider : IDiscoveryProvider
         CompilerDiscoveryResult discovery = await CompilerInstallation.InspectCandidatesAsync(
             candidates, context, cancellationToken).ConfigureAwait(false);
         diagnostics.AddRange(discovery.Failures
-            .Where(failure => failure.Sources.Contains(Source.Explicit) || failure.Sources.Contains(Source.Environment))
-            .Select(failure => Resources.Missing(Name, failure.Message, failure.Path)));
+            .Select(failure => new Diagnostic(failure.Severity,
+                failure.Severity == DiagnosticSeverity.Info ? "excluded-candidate" : "invalid-candidate",
+                Name, failure.Message, failure.Path)));
         DiscoveryResult[] results = await Task.WhenAll(discovery.Installations
             .Select(installation => InspectAsync(installation, query, cancellationToken))).ConfigureAwait(false);
         string? explicitInput = query.CompilerPath ?? query.RootPath;
@@ -181,7 +182,9 @@ public sealed class CompilerProvider : IDiscoveryProvider
                 diagnostics.Add(Resources.Missing(Name, "The compiler resource directory is missing.", target.Compiler.Path));
             }
 
-            string? libgcc = await target.FindFileAsync("libgcc.a", cancellationToken).ConfigureAwait(false);
+            CompilerFileResult libgccResult = await target.FindFileAsync("libgcc.a", cancellationToken).ConfigureAwait(false);
+            diagnostics.AddRange(libgccResult.Diagnostics);
+            string? libgcc = libgccResult.Path;
             if (!target.Compiler.IsClang && libgcc is not null
                 && BinaryImageReader.MatchesTarget(libgcc, target.Identity) is true)
             {
@@ -226,9 +229,10 @@ public sealed class CompilerProvider : IDiscoveryProvider
             string[] names = ["libgcc.a", "libgcc_s.so", "libstdc++.a", "libstdc++.so", "libc++.a", "libc++.so",
                 "libc++.dylib", "libc++abi.a", "libunwind.a", "crt1.o", "Scrt1.o", "rcrt1.o", "crti.o", "crtn.o",
                 "crtbegin.o", "crtbeginS.o", "crtbeginT.o", "crtend.o", "crtendS.o", "clang_rt.crtbegin.o", "clang_rt.crtend.o"];
-            string?[] paths = await Task.WhenAll(names.Select(name => target.FindFileAsync(name, cancellationToken))).ConfigureAwait(false);
+            CompilerFileResult[] files = await Task.WhenAll(names.Select(name => target.FindFileAsync(name, cancellationToken))).ConfigureAwait(false);
+            diagnostics.AddRange(files.SelectMany(file => file.Diagnostics));
             bool hasUnconfirmedFiles = false;
-            foreach (string path in paths.OfType<string>())
+            foreach (string path in files.Select(file => file.Path).OfType<string>())
             {
                 if (TargetResources.IsCompatibleFile(path, target, hasForeignLibc, resources.Owns(path)))
                 {

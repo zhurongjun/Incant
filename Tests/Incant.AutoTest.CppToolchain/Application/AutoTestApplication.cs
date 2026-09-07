@@ -74,6 +74,11 @@ internal static class AutoTestApplication
             }
         }
 
+        foreach (CoverageResult coverage in context.Coverage.Where(result => !result.Passed))
+        {
+            Console.Error.WriteLine($"  Coverage failed: {coverage.Requirement}: {coverage.Reason}");
+        }
+
         Console.WriteLine($"Report: {context.Options.ReportPath}");
         if (context.FatalError is not null)
         {

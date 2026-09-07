@@ -124,7 +124,7 @@ public abstract class ToolSet
             throw new ArgumentException("Installation paths must be absolute.", nameof(path));
         }
 
-        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        return Path.TrimEndingDirectorySeparator(Incant.Internal.FileSystemPath.Absolute(path));
     }
 
     private sealed class SourcedToolSet(ToolSet original, IEnumerable<Source> sources)

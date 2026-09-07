@@ -22,9 +22,7 @@ internal static class ToolchainResolution
         SdkKind kind,
         TargetPlatform platform,
         TargetArchitecture architecture,
-        string? triple,
-        string? multilib,
-        string? sysrootPath,
+        DriverConfiguration driver,
         CancellationToken cancellationToken)
     {
         var query = new SdkQuery
@@ -34,9 +32,9 @@ internal static class ToolchainResolution
             CompilerPath = toolSet.CompilerPath,
             TargetPlatform = platform,
             TargetArchitecture = architecture,
-            TargetTriple = triple,
-            Multilib = multilib,
-            SysrootPath = sysrootPath,
+            TargetTriple = driver.TargetTriple,
+            Multilib = driver.Multilib,
+            SysrootPath = driver.SysrootPath,
             IncludePreview = true,
             Environment = context.EnvironmentFor(owner.Manifest),
         };
@@ -51,7 +49,7 @@ internal static class ToolchainResolution
                 toolSet.CompilerVersion,
                 platform,
                 architecture,
-                multilib ?? "default"),
+                driver.Multilib ?? "default"),
             "resolve target-specific compiler SDK",
             SdkFinder.CreateDefault(),
             query,

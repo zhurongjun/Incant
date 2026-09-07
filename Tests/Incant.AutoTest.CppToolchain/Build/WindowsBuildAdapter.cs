@@ -31,7 +31,7 @@ internal sealed class WindowsBuildAdapter : IBuildAdapter
 
         if (toolchain.AdapterKind == BuildAdapterKind.ClangCl)
         {
-            arguments.Add("--target=" + toolchain.TargetTriple);
+            arguments.Add("--target=" + toolchain.DriverConfiguration.TargetTriple);
         }
 
         foreach (string include in includes)

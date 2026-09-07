@@ -37,11 +37,9 @@ public sealed class CompilerProvider : IDiscoveryProvider
                 (ToolSet)new CompilerToolSet(installation, context))
             .ToArray();
         var diagnostics = new List<Diagnostic>(discovery.Failures
-            .Where(failure => failure.Sources.Contains(Source.Explicit)
-                || failure.Sources.Contains(Source.Environment))
             .Select(failure => new Diagnostic(
-                DiagnosticSeverity.Warning,
-                "invalid-candidate",
+                failure.Severity,
+                failure.Severity == DiagnosticSeverity.Info ? "excluded-candidate" : "invalid-candidate",
                 Name,
                 failure.Message,
                 failure.Path)));

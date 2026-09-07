@@ -45,8 +45,7 @@ internal static class ResolveStage
             }
         }
 
-        bool coverage = ToolchainCoverage.Evaluate(context, completed: false);
-        return coverage && context.CandidatesSatisfy(
+        return context.CandidatesSatisfy(
             candidate => candidate.Status == CandidateStatus.Resolved);
     }
 }

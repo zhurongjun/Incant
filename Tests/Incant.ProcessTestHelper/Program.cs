@@ -11,6 +11,12 @@ internal static class Program
 {
     private static async Task<int> Main(string[] arguments)
     {
+        string configuration = Environment.ProcessPath + ".compiler.json";
+        if (File.Exists(configuration))
+        {
+            return await CompilerCommands.RunAsync(arguments, configuration).ConfigureAwait(false);
+        }
+
         if (arguments.Length == 0)
         {
             return InvalidArgumentsExitCode;
