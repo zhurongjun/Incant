@@ -2,6 +2,7 @@
   <Folder Name="/Source/">
     <Project Path="Source/Incant.CXLegacy.Arguments.Generator/Incant.CXLegacy.Arguments.Generator.csproj" />
     <Project Path="Source/Incant.Base/Incant.Base.csproj" />
+    <Project Path="Source/Incant.CX/Incant.CX.csproj" />
     <Project Path="Source/Incant.CXLegacy/Incant.CXLegacy.csproj" />
     <Project Path="Source/Incant/Incant.csproj" />
   </Folder>

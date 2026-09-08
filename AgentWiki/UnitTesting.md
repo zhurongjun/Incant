@@ -5,7 +5,7 @@
 - 单元测试集中在 `Tests` 目录，项目使用 `*.UnitTest.*` 命名。
 - 测试框架统一使用 xUnit v3，测试平台统一使用 Microsoft Testing Platform。
 - 基础设施冒烟测试只证明测试发现和执行链路有效，不计入功能覆盖。
-- `Incant.UnitTest.Base` 覆盖底层基础设施，`Incant.UnitTest.CXLegacy` 覆盖C 系列设施的确定性行为。
+- `Incant.UnitTest.Base` 覆盖底层基础设施，`Incant.UnitTest.CXLegacy` 覆盖 C 系列旧实现的确定性行为。
 - 依赖真实机器部署的工具链发现由 `Incant.AutoTest.CXLegacyToolchain` 验证，不得混入单元测试。
 
 ## 编写原则
