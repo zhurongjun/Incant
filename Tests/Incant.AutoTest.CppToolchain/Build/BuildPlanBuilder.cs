@@ -1,8 +1,11 @@
+using Incant.Core.Cpp.Arguments;
+
 namespace Incant.AutoTest.CppToolchain;
 
 internal sealed class BuildPlanBuilder(
     string workDirectory,
-    IReadOnlyDictionary<string, string?> environment)
+    IReadOnlyDictionary<string, string?> environment,
+    ResponseFileDialect responseDialect = ResponseFileDialect.Gnu)
 {
     private readonly List<BuildAction> _actions = [];
 
@@ -18,7 +21,8 @@ internal sealed class BuildPlanBuilder(
         IEnumerable<string>? dependencies = null,
         IEnumerable<string>? artifacts = null,
         IEnumerable<string>? outputFragments = null,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        IReadOnlyList<string>? recreatedArtifacts = null)
     {
         _actions.Add(new BuildAction(
             id,
@@ -30,7 +34,11 @@ internal sealed class BuildPlanBuilder(
             (dependencies ?? []).ToArray(),
             (artifacts ?? []).ToArray(),
             (outputFragments ?? []).ToArray(),
-            timeout ?? TimeSpan.FromMinutes(2)));
+            timeout ?? TimeSpan.FromMinutes(2))
+        {
+            ResponseDialect = phase == BuildActionPhase.Build ? responseDialect : null,
+            RecreatedArtifacts = recreatedArtifacts ?? [],
+        });
     }
 
     internal BuildPlan Build()

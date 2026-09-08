@@ -1,4 +1,5 @@
 using Incant.Core.Cpp;
+using Incant.Core.Cpp.Arguments;
 using Incant.Core.Cpp.FindSdk;
 using static Incant.AutoTest.CppToolchain.BuildEnvironment;
 
@@ -26,7 +27,9 @@ internal static class WindowsLibraryChain
             .ToArray();
         IReadOnlyDictionary<string, string?> environment = AddEnvironmentPaths(
             CreateEnvironment(toolchain, workDirectory), includes, libraries);
-        var builder = new BuildPlanBuilder(workDirectory, environment);
+        var builder = new BuildPlanBuilder(workDirectory, environment,
+            toolchain.AdapterKind == BuildAdapterKind.Msvc
+                ? ResponseFileDialect.Msvc : ResponseFileDialect.LlvmWindows);
 
         string staticC = builder.PathFor("static_c.obj");
         string staticExtra = builder.PathFor("static_extra.obj");

@@ -1,3 +1,4 @@
+using Incant.Core.Cpp.Arguments;
 using static Incant.AutoTest.CppToolchain.BuildEnvironment;
 
 namespace Incant.AutoTest.CppToolchain;
@@ -41,7 +42,7 @@ internal static class EmscriptenLibraryChain
             toolchain.CCompiler.Path,
             EmscriptenBuildAdapter.LinkArguments(
                 toolchain,
-                [mainC, archive, "-sENVIRONMENT=node"],
+                [mainC, archive],
                 cJavaScript),
             ["compile-main-c", archiveReady],
             [cJavaScript, cWebAssembly]);
@@ -51,14 +52,16 @@ internal static class EmscriptenLibraryChain
             BuildActionPhase.Build,
             toolchain.CppCompiler.Path,
             EmscriptenBuildAdapter.CompileArguments(
-                toolchain, cpp: true, isPic, FixturePaths.SharedCpp, sharedObject),
+                toolchain, cpp: true, isPic, FixturePaths.SharedCpp, sharedObject,
+                isPic ? CppWasmModule.Side : CppWasmModule.None),
             artifacts: [sharedObject]);
         builder.Add(
             "compile-main-cpp",
             BuildActionPhase.Build,
             toolchain.CppCompiler.Path,
             EmscriptenBuildAdapter.CompileArguments(
-                toolchain, cpp: true, isPic, FixturePaths.MainCpp, mainCpp),
+                toolchain, cpp: true, isPic, FixturePaths.MainCpp, mainCpp,
+                isPic ? CppWasmModule.Main : CppWasmModule.None),
             artifacts: [mainCpp]);
 
         string finalDependency;
@@ -71,8 +74,8 @@ internal static class EmscriptenLibraryChain
                 toolchain.CppCompiler.Path,
                 EmscriptenBuildAdapter.LinkArguments(
                     toolchain,
-                    [sharedObject, archive, "-sSIDE_MODULE=1"],
-                    sideModule),
+                    [sharedObject, archive],
+                    sideModule, CppWasmModule.Side),
                 ["compile-shared", archiveReady],
                 [sideModule]);
             builder.Add(
@@ -81,14 +84,8 @@ internal static class EmscriptenLibraryChain
                 toolchain.CppCompiler.Path,
                 EmscriptenBuildAdapter.LinkArguments(
                     toolchain,
-                    [
-                        mainCpp,
-                        sideModule,
-                        archive,
-                        "-sMAIN_MODULE=1",
-                        "-sENVIRONMENT=node",
-                    ],
-                    cppJavaScript),
+                    [mainCpp, sideModule, archive],
+                    cppJavaScript, CppWasmModule.Main),
                 ["compile-main-cpp", "link-side-module"],
                 [cppJavaScript, cppWebAssembly]);
             finalDependency = "link-main-cpp";
@@ -101,12 +98,7 @@ internal static class EmscriptenLibraryChain
                 toolchain.CppCompiler.Path,
                 EmscriptenBuildAdapter.LinkArguments(
                     toolchain,
-                    [
-                        mainCpp,
-                        sharedObject,
-                        archive,
-                        "-sENVIRONMENT=node",
-                    ],
+                    [mainCpp, sharedObject, archive],
                     cppJavaScript),
                 ["compile-main-cpp", "compile-shared", archiveReady],
                 [cppJavaScript, cppWebAssembly]);

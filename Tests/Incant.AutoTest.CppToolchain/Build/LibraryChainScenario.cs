@@ -1,3 +1,5 @@
+using Incant.Core.Cpp.Arguments;
+
 namespace Incant.AutoTest.CppToolchain;
 
 internal static class LibraryChainScenario
@@ -19,21 +21,20 @@ internal static class LibraryChainScenario
                 compile(cpp, source, output), artifacts: [output]);
         }
 
-        bool librarian = toolchain.Archiver.Name is "lib" or "llvm-lib";
         builder.Add("archive-static", BuildActionPhase.Build, toolchain.Archiver.Path,
-            librarian ? ["/NOLOGO", "/OUT:" + archive, staticC, staticExtra, staticCpp]
-                : ["rcs", archive, staticC, staticExtra, staticCpp],
-            ["compile-static-c", "compile-static-extra", "compile-static-cpp"], [archive]);
+            DriverArguments.ArchiveArguments(toolchain, CppArchiveMode.Create, archive, [staticC, staticExtra, staticCpp]),
+            ["compile-static-c", "compile-static-extra", "compile-static-cpp"], [archive], recreatedArtifacts: [archive]);
         string archiveReady = "archive-static";
         if (toolchain.Ranlib is not null)
         {
             builder.Add("index-static", BuildActionPhase.Build, toolchain.Ranlib.Path,
-                [archive], [archiveReady], [archive]);
+                DriverArguments.ArchiveArguments(toolchain, CppArchiveMode.Index, archive, indexer: true),
+                [archiveReady], [archive]);
             archiveReady = "index-static";
         }
 
         builder.Add("inspect-static", BuildActionPhase.Build, toolchain.Archiver.Path,
-            librarian ? ["/NOLOGO", "/LIST", archive] : ["t", archive],
+            DriverArguments.ArchiveArguments(toolchain, CppArchiveMode.List, archive),
             [archiveReady], outputFragments:
                 [Path.GetFileName(staticC), Path.GetFileName(staticExtra), Path.GetFileName(staticCpp)]);
         return "inspect-static";

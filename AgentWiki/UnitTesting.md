@@ -95,3 +95,10 @@ dotnet run --project Tests/Incant.AutoTest.CppToolchain/Incant.AutoTest.CppToolc
   --work-root build/toolchain-autotest/ubuntu-24.04 \
   --keep-work
 ```
+
+## 参数集合与 Driver
+
+- `Incant.UnitTest.Core/Arguments` 通过公开集合 API 验证键冲突、快照、来源、菱形合并、主动重复贡献、移除、覆盖及元数据隔离；自定义 Driver 示例不得依赖 Toolchain 或 Finder。
+- 生成器通过编译和调用生成的标量、序列、映射 API 验证；非法声明和方法冲突检查编译诊断，不使用反射或生成源码快照作为主要证据。
+- `Cpp/Arguments` 验证同一配置跨操作使用、必需输入、参数顺序与边界、链接分组、显式不支持的功能及版本敏感诊断。响应编码针对真实 token 的空值、Unicode、引号和反斜杠边界；少量必要的命令字面断言不能取代真实工具链运行。
+- 生产 Driver 不做发现、文件写入或执行。真实编译、归档、链接和运行沿用现有 AutoTest 场景；本轮本地只运行单元测试，不运行 Setup 或 CppToolchain AutoTest。

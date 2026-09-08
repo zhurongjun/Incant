@@ -8,5 +8,6 @@
   <ItemGroup>
     <Compile Include="../Shared/FileSystemPath.cs" Link="Internal/FileSystemPath.cs" />
     <ProjectReference Include="../Incant.Base/Incant.Base.csproj" />
+    <ProjectReference Include="../Incant.Arguments.Generator/Incant.Arguments.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

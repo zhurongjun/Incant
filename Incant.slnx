@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/Source/">
+    <Project Path="Source/Incant.Arguments.Generator/Incant.Arguments.Generator.csproj" />
     <Project Path="Source/Incant.Base/Incant.Base.csproj" />
     <Project Path="Source/Incant.Core/Incant.Core.csproj" />
     <Project Path="Source/Incant/Incant.csproj" />

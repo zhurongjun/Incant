@@ -1,5 +1,6 @@
+using Incant.Core.Arguments;
 using Incant.Core.Cpp;
-using static Incant.AutoTest.CppToolchain.DriverArguments;
+using Incant.Core.Cpp.Arguments;
 
 namespace Incant.AutoTest.CppToolchain;
 
@@ -9,75 +10,42 @@ internal sealed class UnixDriverBuildAdapter : IBuildAdapter
         UnixLibraryChain.Create(context, toolchain);
 
     internal static IReadOnlyList<string> CompileArguments(
-        ResolvedToolchain toolchain,
-        bool cpp,
-        string source,
-        string output)
-    {
-        var arguments = new List<string>(
-            DriverCompileArguments(toolchain, cpp, positionIndependent: true));
-        arguments.AddRange(["-c", source, "-o", output]);
-        return arguments;
-    }
+        ResolvedToolchain toolchain, bool cpp, string source, string output) =>
+        DriverArguments.Generate(toolchain, CppOperation.Compile,
+            DriverArguments.CompileConfiguration(toolchain, cpp, true, source, output));
 
     internal static IReadOnlyList<string> LinkArguments(
-        ResolvedToolchain toolchain,
-        IReadOnlyList<string> inputs,
-        string output,
-        bool addRuntimePath = false)
+        ResolvedToolchain toolchain, IReadOnlyList<string> inputs, string output, bool addRuntimePath = false)
     {
-        var arguments = new List<string>(DriverLinkArguments(toolchain));
-        arguments.AddRange(inputs);
+        ArgumentSet arguments = DriverArguments.LinkConfiguration(toolchain, inputs, output);
         if (addRuntimePath)
         {
-            if (toolchain.TargetPlatform == TargetPlatform.Linux)
+            arguments = toolchain.TargetPlatform switch
             {
-                arguments.Add("-Wl,-rpath,$ORIGIN");
-            }
-            else if (toolchain.TargetPlatform == TargetPlatform.MacOS)
-            {
-                arguments.Add("-Wl,-rpath,@loader_path");
-            }
+                TargetPlatform.Linux => arguments.WithRpaths(["$ORIGIN"]),
+                TargetPlatform.MacOS => arguments.WithRpaths(["@loader_path"]),
+                _ => arguments,
+            };
         }
 
-        arguments.AddRange(["-o", output]);
-        return arguments;
+        return DriverArguments.Generate(toolchain, CppOperation.Link, arguments);
     }
 
     internal static IReadOnlyList<string> SharedLinkArguments(
-        ResolvedToolchain toolchain,
-        string sharedObject,
-        string archive,
-        string output)
+        ResolvedToolchain toolchain, string sharedObject, string archive, string output)
     {
-        var arguments = new List<string>(DriverLinkArguments(toolchain));
-        if (toolchain.TargetPlatform is TargetPlatform.MacOS
-            or TargetPlatform.IOS
-            or TargetPlatform.IOSSimulator)
-        {
-            arguments.Add("-dynamiclib");
-            arguments.Add("-Wl,-install_name,@rpath/" + Path.GetFileName(output));
-        }
-        else
-        {
-            arguments.Add("-shared");
-            arguments.Add("-Wl,-soname," + Path.GetFileName(output));
-        }
-
-        arguments.AddRange([sharedObject, archive, "-o", output]);
-        return arguments;
+        ArgumentSet arguments = DriverArguments.LinkConfiguration(toolchain, [sharedObject, archive], output)
+            .WithOutputKind(CppOutputKind.SharedLibrary);
+        arguments = toolchain.TargetPlatform is TargetPlatform.MacOS or TargetPlatform.IOS or TargetPlatform.IOSSimulator
+            ? arguments.WithInstallName("@rpath/" + Path.GetFileName(output))
+            : arguments.WithSoname(Path.GetFileName(output));
+        return DriverArguments.Generate(toolchain, CppOperation.Link, arguments);
     }
 
     internal static string SharedLibraryName(ResolvedToolchain toolchain) =>
-        toolchain.TargetPlatform is TargetPlatform.MacOS
-            or TargetPlatform.IOS
-            or TargetPlatform.IOSSimulator
-            ? "libincant_fixture_shared.dylib"
-            : "libincant_fixture_shared.so";
+        toolchain.TargetPlatform is TargetPlatform.MacOS or TargetPlatform.IOS or TargetPlatform.IOSSimulator
+            ? "libincant_fixture_shared.dylib" : "libincant_fixture_shared.so";
 
-    internal static string ExecutableName(
-        ResolvedToolchain toolchain,
-        string stem) => toolchain.TargetPlatform == TargetPlatform.Windows
-            ? stem + ".exe"
-            : stem;
+    internal static string ExecutableName(ResolvedToolchain toolchain, string stem) =>
+        toolchain.TargetPlatform == TargetPlatform.Windows ? stem + ".exe" : stem;
 }

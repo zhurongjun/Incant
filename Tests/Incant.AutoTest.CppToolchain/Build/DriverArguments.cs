@@ -1,156 +1,111 @@
-using Incant.Core.Cpp;
+using Incant.Core.Arguments;
+using Incant.Core.Cpp.Arguments;
 
 namespace Incant.AutoTest.CppToolchain;
 
 internal static class DriverArguments
 {
-    internal static IReadOnlyList<string> DriverCompileArguments(
-        ResolvedToolchain toolchain,
-        bool cpp,
-        bool positionIndependent)
+    internal static ArgumentSet Configuration(ResolvedToolchain toolchain)
     {
-        var arguments = new List<string>();
-        arguments.AddRange(TargetArguments(toolchain));
-        arguments.AddRange(VariantArguments(toolchain));
-        arguments.Add(cpp ? "-std=c++17" : "-std=c11");
-        if (positionIndependent)
+        ArgumentSet arguments = new ArgumentSet(new Dictionary<string, string>
         {
-            arguments.Add("-fPIC");
+            ["scenario"] = toolchain.Id,
+            ["installation"] = string.Join(",", toolchain.InstallationIds),
+        }).WithPlatform(toolchain.TargetPlatform).WithArchitecture(toolchain.TargetArchitecture);
+        if (toolchain.ToolSet.CompilerVersion is Version version)
+        {
+            arguments = arguments.WithCompilerVersion(version);
         }
 
-        arguments.AddRange(["-I", FixturePaths.Root]);
-        foreach (string directory in DriverResourceArguments.IncludeDirectories(
-            toolchain, cpp))
+        if (toolchain.DriverConfiguration.TargetTriple is string triple
+            && toolchain.AdapterKind is not (BuildAdapterKind.Gnu or BuildAdapterKind.Msvc or BuildAdapterKind.Emscripten))
         {
-            arguments.AddRange(["-isystem", directory]);
+            arguments = arguments.WithTriple(triple);
         }
 
-        foreach (string framework in DriverResourceArguments.FrameworkDirectories(
-            toolchain))
+        if (toolchain.DriverConfiguration.SysrootPath is string sysroot
+            && toolchain.AdapterKind is not (BuildAdapterKind.Msvc or BuildAdapterKind.ClangCl))
         {
-            arguments.AddRange(["-F", framework]);
+            arguments = arguments.WithSysroot(sysroot);
         }
 
-        return arguments;
-    }
-
-    internal static IReadOnlyList<string> DriverLinkArguments(
-        ResolvedToolchain toolchain)
-    {
-        var arguments = new List<string>();
-        arguments.AddRange(TargetArguments(toolchain));
-        arguments.AddRange(VariantArguments(toolchain));
-        foreach (string directory in DriverResourceArguments.LinkDirectories(
-            toolchain))
+        if (toolchain.AndroidApi is int api)
         {
-            arguments.AddRange(["-L", directory]);
+            arguments = arguments.WithAndroidApi(api);
         }
 
-        foreach (string framework in DriverResourceArguments.FrameworkDirectories(
-            toolchain))
+        if (toolchain.Multilib is string multilib)
         {
-            arguments.AddRange(["-F", framework]);
+            arguments = arguments.WithMultilib(multilib);
         }
 
-        return arguments;
-    }
-
-    internal static IReadOnlyList<string> TargetArguments(
-        ResolvedToolchain toolchain)
-    {
-        string? sysroot = toolchain.DriverConfiguration.SysrootPath;
-        var arguments = new List<string>();
-        switch (toolchain.AdapterKind)
-        {
-            case BuildAdapterKind.Gnu:
-                if (sysroot is not null)
-                {
-                    if (toolchain.TargetPlatform == TargetPlatform.MacOS)
-                    {
-                        arguments.AddRange(["-isysroot", sysroot]);
-                    }
-                    else
-                    {
-                        arguments.Add("--sysroot=" + sysroot);
-                    }
-                }
-
-                break;
-            case BuildAdapterKind.Llvm:
-                if (toolchain.DriverConfiguration.TargetTriple is string target)
-                {
-                    arguments.Add("--target=" + target);
-                }
-
-                if (sysroot is not null)
-                {
-                    arguments.Add(toolchain.TargetPlatform == TargetPlatform.MacOS
-                        ? "-isysroot"
-                        : "--sysroot=" + sysroot);
-                    if (toolchain.TargetPlatform == TargetPlatform.MacOS)
-                    {
-                        arguments.Add(sysroot);
-                    }
-                }
-
-                break;
-            case BuildAdapterKind.Apple:
-                arguments.AddRange(["-target", toolchain.DriverConfiguration.TargetTriple!]);
-                if (sysroot is not null)
-                {
-                    arguments.AddRange(["-isysroot", sysroot]);
-                }
-
-                break;
-            case BuildAdapterKind.Android:
-                string androidTarget = toolchain.DriverConfiguration.TargetTriple
-                    + toolchain.AndroidApi!.Value.ToString(
-                        System.Globalization.CultureInfo.InvariantCulture);
-                arguments.Add("--target=" + androidTarget);
-                if (sysroot is not null)
-                {
-                    arguments.Add("--sysroot=" + sysroot);
-                }
-
-                break;
-            case BuildAdapterKind.Wasi:
-                arguments.Add("--target=" + toolchain.DriverConfiguration.TargetTriple);
-                if (sysroot is not null)
-                {
-                    arguments.Add("--sysroot=" + sysroot);
-                }
-
-                break;
-            case BuildAdapterKind.Emscripten:
-                if (sysroot is not null)
-                {
-                    arguments.Add("--sysroot=" + sysroot);
-                }
-
-                break;
-        }
-
-        return arguments;
-    }
-
-    private static IReadOnlyList<string> VariantArguments(ResolvedToolchain toolchain)
-    {
         if (toolchain.AdapterKind == BuildAdapterKind.Wasi)
         {
-            return toolchain.Multilib switch
+            arguments = arguments.WithExceptions(toolchain.Multilib == "eh"
+                ? CppExceptionMode.Wasm : CppExceptionMode.Disabled);
+            if (toolchain.Multilib == "eh")
             {
-                null or "." => ["-fno-exceptions"],
-                "eh" => ["-fwasm-exceptions", "-mllvm", "-wasm-use-legacy-eh=false"],
-                _ => throw new NotSupportedException($"Unknown WASI variant '{toolchain.Multilib}'."),
-            };
+                arguments = arguments.WithWasmLegacyExceptions(false);
+            }
         }
 
-        return toolchain.Multilib switch
-        {
-            "32" => ["-m32"],
-            "64" => ["-m64"],
-            "x32" => ["-mx32"],
-            _ => [],
-        };
+        return arguments;
     }
+
+    internal static ArgumentSet CompileConfiguration(
+        ResolvedToolchain toolchain, bool cpp, bool positionIndependent, string source, string output) =>
+        Configuration(toolchain)
+            .WithLanguage(cpp ? CppLanguage.Cpp : CppLanguage.C)
+            .WithStandard(cpp ? "c++17" : "c11")
+            .WithPositionIndependent(positionIndependent)
+            .WithInputs([source])
+            .WithOutput(output)
+            .WithIncludes([FixturePaths.Root])
+            .WithSystemIncludes(DriverResourceArguments.IncludeDirectories(toolchain, cpp))
+            .WithFrameworkDirectories(DriverResourceArguments.FrameworkDirectories(toolchain));
+
+    internal static ArgumentSet LinkConfiguration(
+        ResolvedToolchain toolchain, IReadOnlyList<string> inputs, string output) =>
+        Configuration(toolchain)
+            .WithInputs(inputs)
+            .WithOutput(output)
+            .WithLibraryDirectories(DriverResourceArguments.LinkDirectories(toolchain))
+            .WithFrameworkDirectories(DriverResourceArguments.FrameworkDirectories(toolchain));
+
+    internal static IReadOnlyList<string> Generate(
+        ResolvedToolchain toolchain, CppOperation operation, ArgumentSet arguments)
+    {
+        var driver = new CppArgumentDriver(Dialect(toolchain), operation);
+        ArgumentGenerationResult result = driver.Generate(arguments);
+        if (!result.Success)
+        {
+            throw new InvalidOperationException(string.Join(Environment.NewLine,
+                result.Diagnostics.Select(diagnostic =>
+                    diagnostic.Key + ": " + diagnostic.Message + " Sources: "
+                    + string.Join("; ", diagnostic.Origins.Select(origin =>
+                        origin.SetId + " [" + string.Join(", ", origin.Metadata.Select(pair => pair.Key + "=" + pair.Value)) + "]")))));
+        }
+
+        return result.Arguments;
+    }
+
+    internal static IReadOnlyList<string> ArchiveArguments(
+        ResolvedToolchain toolchain, CppArchiveMode mode, string archive, IReadOnlyList<string>? inputs = null, bool indexer = false) =>
+        Generate(toolchain, CppOperation.Archive, Configuration(toolchain)
+            .WithArchiveDialect(indexer ? CppArchiveDialect.Ranlib : toolchain.Archiver.Name is "lib" or "llvm-lib"
+                ? CppArchiveDialect.Msvc : CppArchiveDialect.Gnu)
+            .WithArchiveMode(mode).WithOutput(archive).WithInputs(inputs ?? []));
+
+    private static CppDialect Dialect(ResolvedToolchain toolchain) => toolchain.AdapterKind switch
+    {
+        BuildAdapterKind.Msvc => CppDialect.Msvc,
+        BuildAdapterKind.ClangCl => CppDialect.ClangCl,
+        BuildAdapterKind.Gnu => CppDialect.Gnu,
+        BuildAdapterKind.Llvm => CppDialect.Clang,
+        BuildAdapterKind.Apple => CppDialect.AppleClang,
+        BuildAdapterKind.Android => CppDialect.AndroidClang,
+        BuildAdapterKind.Emscripten => CppDialect.Emscripten,
+        BuildAdapterKind.Wasi => CppDialect.WasiClang,
+        _ => throw new ArgumentOutOfRangeException(nameof(toolchain)),
+    };
 }

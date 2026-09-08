@@ -1,3 +1,5 @@
+using Incant.Core.Cpp.Arguments;
+
 namespace Incant.AutoTest.CppToolchain;
 
 internal enum BuildActionPhase
@@ -25,7 +27,14 @@ internal sealed record BuildAction(
     IReadOnlyList<string> Dependencies,
     IReadOnlyList<string> ExpectedArtifacts,
     IReadOnlyList<string> ExpectedOutputFragments,
-    TimeSpan Timeout);
+    TimeSpan Timeout)
+{
+    internal ResponseFileDialect? ResponseDialect { get; init; }
+
+    internal int ResponseArgumentOffset { get; init; }
+
+    internal IReadOnlyList<string> RecreatedArtifacts { get; init; } = [];
+}
 
 internal sealed class BuildPlan
 {
@@ -45,6 +54,8 @@ internal sealed class BuildActionResult
     internal required IReadOnlyList<string> Arguments { get; set; }
 
     internal BuildActionStatus Status { get; set; } = BuildActionStatus.Pending;
+
+    internal IReadOnlyList<string>? TransportArguments { get; set; }
 
     internal int? ExitCode { get; set; }
 

@@ -1,5 +1,5 @@
-using Incant.Core.Cpp;
-using Incant.Core.Cpp.FindSdk;
+using Incant.Core.Arguments;
+using Incant.Core.Cpp.Arguments;
 
 namespace Incant.AutoTest.CppToolchain;
 
@@ -9,82 +9,39 @@ internal sealed class WindowsBuildAdapter : IBuildAdapter
         WindowsLibraryChain.Create(context, toolchain);
 
     internal static IReadOnlyList<string> CompileArguments(
-        ResolvedToolchain toolchain,
-        IReadOnlyList<string> includes,
-        bool cpp,
-        string source,
-        string output)
+        ResolvedToolchain toolchain, IReadOnlyList<string> includes, bool cpp, string source, string output)
     {
-        var arguments = new List<string>
-        {
-            "/nologo",
-            "/c",
-            cpp ? "/TP" : "/TC",
-            cpp ? "/std:c++17" : "/std:c11",
-            "/MD",
-            "/W4",
-        };
+        ArgumentSet arguments = DriverArguments.Configuration(toolchain)
+            .WithLanguage(cpp ? CppLanguage.Cpp : CppLanguage.C)
+            .WithStandard(cpp ? "c++17" : "c11")
+            .WithWindowsRuntime(CppWindowsRuntime.MD)
+            .WithWarnings(CppWarningLevel.Extra)
+            .WithIncludes(includes).WithOutput(output).WithInputs([source]);
         if (cpp)
         {
-            arguments.Add("/EHsc");
+            arguments = arguments.WithExceptions(CppExceptionMode.Native);
         }
 
-        if (toolchain.AdapterKind == BuildAdapterKind.ClangCl)
-        {
-            arguments.Add("--target=" + toolchain.DriverConfiguration.TargetTriple);
-        }
-
-        foreach (string include in includes)
-        {
-            arguments.Add("/I" + include);
-        }
-
-        arguments.Add("/Fo" + output);
-        arguments.Add(source);
-        return arguments;
+        return DriverArguments.Generate(toolchain, CppOperation.Compile, arguments);
     }
 
     internal static IReadOnlyList<string> LinkArguments(
-        ResolvedToolchain toolchain,
-        IReadOnlyList<string> libraryDirectories,
-        IReadOnlyList<string> inputs,
-        string output,
-        bool createDll = false,
-        string? importLibrary = null)
+        ResolvedToolchain toolchain, IReadOnlyList<string> libraryDirectories, IReadOnlyList<string> inputs,
+        string output, bool createDll = false, string? importLibrary = null)
     {
-        var arguments = new List<string>
+        ArgumentSet arguments = DriverArguments.Configuration(toolchain)
+            .WithLinkerDialect(toolchain.LinkerFlavor == LinkerFlavor.Lld ? CppLinkerDialect.LldLink : CppLinkerDialect.Msvc)
+            .WithOutputKind(createDll ? CppOutputKind.SharedLibrary : CppOutputKind.Executable)
+            .WithLibraryDirectories(libraryDirectories).WithInputs(inputs).WithOutput(output);
+        if (createDll && importLibrary is not null)
         {
-            "/NOLOGO",
-            "/MACHINE:" + Machine(toolchain.TargetArchitecture),
-            "/OUT:" + output,
-        };
-        if (createDll)
-        {
-            arguments.Add("/DLL");
-            arguments.Add("/IMPLIB:" + importLibrary);
+            arguments = arguments.WithImportLibrary(importLibrary);
         }
-        else
+        else if (!createDll)
         {
-            arguments.Add("/SUBSYSTEM:CONSOLE");
+            arguments = arguments.WithSubsystem("CONSOLE");
         }
 
-        foreach (string directory in libraryDirectories)
-        {
-            arguments.Add("/LIBPATH:" + directory);
-        }
-
-        arguments.AddRange(inputs);
-        return arguments;
+        return DriverArguments.Generate(toolchain, CppOperation.Link, arguments);
     }
-
-    internal static string Machine(TargetArchitecture architecture) =>
-        architecture switch
-        {
-            TargetArchitecture.X86 => "X86",
-            TargetArchitecture.X64 => "X64",
-            TargetArchitecture.ARM => "ARM",
-            TargetArchitecture.ARM64 => "ARM64",
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(architecture), architecture, null),
-        };
 }

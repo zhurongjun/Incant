@@ -1,4 +1,5 @@
-using static Incant.AutoTest.CppToolchain.DriverArguments;
+using Incant.Core.Arguments;
+using Incant.Core.Cpp.Arguments;
 
 namespace Incant.AutoTest.CppToolchain;
 
@@ -19,32 +20,32 @@ internal sealed class EmscriptenBuildAdapter : IBuildAdapter
 
                 (string executable, IReadOnlyList<string> arguments) =
                     EmscriptenLauncher.ResolveWrapper(context, toolchain, action);
-                return action with { ExecutablePath = executable, Arguments = arguments };
+                return action with
+                {
+                    ExecutablePath = executable,
+                    Arguments = arguments,
+                    ResponseArgumentOffset = arguments.Count - action.Arguments.Count,
+                };
             }).ToArray(),
         };
     }
 
     internal static IReadOnlyList<string> CompileArguments(
-        ResolvedToolchain toolchain,
-        bool cpp,
-        bool isPic,
-        string source,
-        string output)
-    {
-        var arguments = new List<string>(
-            DriverCompileArguments(toolchain, cpp, isPic));
-        arguments.AddRange(["-c", source, "-o", output]);
-        return arguments;
-    }
+        ResolvedToolchain toolchain, bool cpp, bool isPic, string source, string output,
+        CppWasmModule module = CppWasmModule.None) =>
+        DriverArguments.Generate(toolchain, CppOperation.Compile,
+            DriverArguments.CompileConfiguration(toolchain, cpp, isPic, source, output).WithWasmModule(module));
 
     internal static IReadOnlyList<string> LinkArguments(
-        ResolvedToolchain toolchain,
-        IReadOnlyList<string> inputs,
-        string output)
+        ResolvedToolchain toolchain, IReadOnlyList<string> inputs, string output,
+        CppWasmModule module = CppWasmModule.None)
     {
-        var arguments = new List<string>(DriverLinkArguments(toolchain));
-        arguments.AddRange(inputs);
-        arguments.AddRange(["-o", output]);
-        return arguments;
+        ArgumentSet arguments = DriverArguments.LinkConfiguration(toolchain, inputs, output).WithWasmModule(module);
+        if (module is not (CppWasmModule.Side or CppWasmModule.SideDeadCodeElimination))
+        {
+            arguments = arguments.WithWasmEnvironment("node");
+        }
+
+        return DriverArguments.Generate(toolchain, CppOperation.Link, arguments);
     }
 }

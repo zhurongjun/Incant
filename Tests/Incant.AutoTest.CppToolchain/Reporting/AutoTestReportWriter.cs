@@ -223,6 +223,7 @@ internal static class AutoTestReportWriter
             result.Phase,
             result.ExecutablePath,
             result.Arguments,
+            result.TransportArguments,
             result.Status,
             result.ExitCode,
             result.TimedOut,

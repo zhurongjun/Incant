@@ -123,9 +123,12 @@ internal sealed class SerialBuildScheduler
         {
             Directory.CreateDirectory(logDirectory);
             Directory.CreateDirectory(action.WorkingDirectory);
+            IReadOnlyList<string> transport = await BuildCommandPreparer.PrepareAsync(
+                action, logDirectory, cancellationToken).ConfigureAwait(false);
+            result.TransportArguments = transport;
             ProcessResult process = await Misc.RunProcessAsync(
                 action.ExecutablePath,
-                action.Arguments,
+                transport,
                 new ProcessOptions
                 {
                     WorkingDirectory = action.WorkingDirectory,
