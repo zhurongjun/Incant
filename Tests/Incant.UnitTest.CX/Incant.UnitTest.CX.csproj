@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Source/Incant.CX/Incant.CX.csproj" />
+    <ProjectReference Include="../../Source/Incant.CX.Arguments.Generator/Incant.CX.Arguments.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
+    <ProjectReference Include="../Incant.ProcessTestHelper/Incant.ProcessTestHelper.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/CompilerInvocation.cs" Link="TestSupport/CompilerInvocation.cs" />
+    <Compile Include="../Shared/CompilerInvocationStore.cs" Link="TestSupport/CompilerInvocationStore.cs" />
+  </ItemGroup>
+</Project>

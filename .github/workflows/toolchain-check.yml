@@ -61,7 +61,7 @@ jobs:
         shell: bash
         run: >-
           dotnet run
-          --project Tests/Incant.AutoTest.CppToolchain.Setup/Incant.AutoTest.CppToolchain.Setup.csproj
+          --project Tests/Incant.AutoTest.CXToolchain.Setup/Incant.AutoTest.CXToolchain.Setup.csproj
           --configuration Release
           -- "${{ matrix.profile }}"
 
@@ -70,7 +70,7 @@ jobs:
         shell: bash
         env:
           INCANT_AUTOTEST_PROFILE: ${{ matrix.profile }}
-        run: Incant.AutoTest.CppToolchain "$INCANT_AUTOTEST_PROFILE"
+        run: Incant.AutoTest.CXToolchain "$INCANT_AUTOTEST_PROFILE"
 
       - name: Report setup failure
         if: always() && steps.setup.outcome != 'success'

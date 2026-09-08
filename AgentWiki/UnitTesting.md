@@ -5,8 +5,8 @@
 - 单元测试集中在 `Tests` 目录，项目使用 `*.UnitTest.*` 命名。
 - 测试框架统一使用 xUnit v3，测试平台统一使用 Microsoft Testing Platform。
 - 基础设施冒烟测试只证明测试发现和执行链路有效，不计入功能覆盖。
-- `Incant.UnitTest.Base` 覆盖底层基础设施，`Incant.UnitTest.Core` 覆盖构建系统核心的确定性行为。
-- 依赖真实机器部署的工具链发现由 `Incant.AutoTest.CppToolchain` 验证，不得混入单元测试。
+- `Incant.UnitTest.Base` 覆盖底层基础设施，`Incant.UnitTest.CX` 覆盖C 系列设施的确定性行为。
+- 依赖真实机器部署的工具链发现由 `Incant.AutoTest.CXToolchain` 验证，不得混入单元测试。
 
 ## 编写原则
 
@@ -51,13 +51,13 @@ dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configurati
 
 ## 工具链 AutoTest
 
-- Core 单元测试通过公开 Finder/Provider API 构造受控候选或合成安装目录与启动器，验证 Cpp.FindTools / Cpp.FindSdk 的调度、筛选、选择、目标别名和不可变快照；不得读取本机安装、Registry 或网络。
-- 依赖真实安装的验证统一由 `Incant.AutoTest.CppToolchain` 承担。它不提供自由组合的发现参数，而是公开 `windows-vs2022`、`windows-vs2026`、`ubuntu-24.04` 和 `macos-15-arm64` 四个完整环境 Profile。
+- CX 单元测试通过公开 Finder/Provider API 构造受控候选或合成安装目录与启动器，验证 CX.FindTools / CX.FindSdk 的调度、筛选、选择、目标别名和不可变快照；不得读取本机安装、Registry 或网络。
+- 依赖真实安装的验证统一由 `Incant.AutoTest.CXToolchain` 承担。它不提供自由组合的发现参数，而是公开 `windows-vs2022`、`windows-vs2026`、`ubuntu-24.04` 和 `macos-15-arm64` 四个完整环境 Profile。
 - 每个 Profile 分开声明预装家族覆盖、主动部署安装及目标场景，并依次运行 `Preflight`、`Discover`、`Resolve`、`Build` 和 `Execute`。候选之间互不回退；某个候选失败只跳过依赖它的动作。
 - CI Setup 写出 schema version 1 的环境清单，记录实际安装根目录、版本、来源、局部环境和运行时。AutoTest 对主动部署路径应用候选边界及声明版本范围；预装安装来自全局 Finder 发现，旧清单的预装记录不恢复固定版本门槛。
 - 全局分别执行一次 ToolSet/SDK 自动发现；主动部署安装执行显式查询，目标 SDK 查询按构建需要复用。查询筛选、无效输入、ABI/变体隔离、部分安装、别名、wrapper、入口优先级、取消、快照和独立安装由受控黑盒单元测试承接。
 - 固定签入的 C/C++ 资产用于编译多个对象、创建和检查静态库、链接纯 C 程序、构建共享库、链接 C++ 程序及运行可执行产物。Emscripten 另测默认与 `pic`/side-module 布局；WASI 使用 Wasmtime 执行。
-- AutoTest 只读取环境清单和安装，不下载依赖或修改全局环境。额外 SDK 由 `Tests/Incant.AutoTest.CppToolchain.Setup` 安装到 `build/toolchains`，各候选的环境变量仅传给对应进程。
+- AutoTest 只读取环境清单和安装，不下载依赖或修改全局环境。额外 SDK 由 `Tests/Incant.AutoTest.CXToolchain.Setup` 安装到 `build/toolchains`，各候选的环境变量仅传给对应进程。
 - schema 2 报告总是在 `finally` 中写出，集中保存安装与 SDK 快照，场景通过 ID 引用，并包含覆盖结果、失败/跳过原因、诊断、动作、退出码、耗时、日志和产物。宿主/清单配置错误返回 2，测试失败返回 1，成功返回 0，取消返回 130。
 - 本机只能声明实际执行过的 Profile；四个 GitHub runner 的 matrix 结果才构成跨平台功能验收。
 
@@ -72,23 +72,23 @@ dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configurati
 - WASI AutoTest 明确选择默认布局并执行原有静态库及可执行程序链。EH 布局本轮验证发现和筛选契约，不作为异常执行能力已经通过的证明。
 
 ```shell
-# Core 局部单元测试
-dotnet test --project Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Cpp.FindTools.FinderTests
+# CX 局部单元测试
+dotnet test --project Tests/Incant.UnitTest.CX/Incant.UnitTest.CX.csproj -- --filter-class Incant.UnitTest.CX.FindTools.FinderTests
 
 # SDK 资源、查询语义与 WASI 目标别名测试
-dotnet test --project Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj -- --filter-class Incant.UnitTest.Core.Cpp.FindSdk.FinderTests
+dotnet test --project Tests/Incant.UnitTest.CX/Incant.UnitTest.CX.csproj -- --filter-class Incant.UnitTest.CX.FindSdk.FinderTests
 
-# Core 完整单元测试
-dotnet test --project Tests/Incant.UnitTest.Core/Incant.UnitTest.Core.csproj
+# CX 完整单元测试
+dotnet test --project Tests/Incant.UnitTest.CX/Incant.UnitTest.CX.csproj
 
 # 使用 CI Setup 生成的清单运行一个完整环境 Profile
-Incant.AutoTest.CppToolchain windows-vs2022
-Incant.AutoTest.CppToolchain windows-vs2026
-Incant.AutoTest.CppToolchain ubuntu-24.04
-Incant.AutoTest.CppToolchain macos-15-arm64
+Incant.AutoTest.CXToolchain windows-vs2022
+Incant.AutoTest.CXToolchain windows-vs2026
+Incant.AutoTest.CXToolchain ubuntu-24.04
+Incant.AutoTest.CXToolchain macos-15-arm64
 
 # 本地调试时可显式指定清单、报告和工作目录
-dotnet run --project Tests/Incant.AutoTest.CppToolchain/Incant.AutoTest.CppToolchain.csproj -- \
+dotnet run --project Tests/Incant.AutoTest.CXToolchain/Incant.AutoTest.CXToolchain.csproj -- \
   ubuntu-24.04 \
   --environment build/toolchain-environments/ubuntu-24.04.json \
   --report build/toolchain-reports/ubuntu-24.04.json \
@@ -98,7 +98,7 @@ dotnet run --project Tests/Incant.AutoTest.CppToolchain/Incant.AutoTest.CppToolc
 
 ## 参数集合与 Driver
 
-- `Incant.UnitTest.Core/Arguments` 通过公开集合 API 验证键冲突、快照、来源、菱形合并、主动重复贡献、移除、覆盖及元数据隔离；自定义 Driver 示例不得依赖 Toolchain 或 Finder。
+- `Incant.UnitTest.CX/Arguments` 通过公开集合 API 验证固定属性、未设置与空值、标量和映射冲突、快照、来源、菱形合并、主动重复贡献、移除、覆盖及元数据隔离；不再提供自定义键或通用 Driver 示例。
 - 生成器通过编译和调用生成的标量、序列、映射 API 验证；非法声明和方法冲突检查编译诊断，不使用反射或生成源码快照作为主要证据。
-- `Cpp/Arguments` 验证同一配置跨操作使用、必需输入、参数顺序与边界、链接分组、显式不支持的功能及版本敏感诊断。响应编码针对真实 token 的空值、Unicode、引号和反斜杠边界；少量必要的命令字面断言不能取代真实工具链运行。
-- 生产 Driver 不做发现、文件写入或执行。真实编译、归档、链接和运行沿用现有 AutoTest 场景；本轮本地只运行单元测试，不运行 Setup 或 CppToolchain AutoTest。
+- `Arguments` 验证同一配置跨操作使用、必需输入、参数顺序与边界、链接分组、显式不支持的功能及版本敏感诊断。响应编码针对真实 token 的空值、Unicode、引号和反斜杠边界；少量必要的命令字面断言不能取代真实工具链运行。
+- 生产 Driver 不做发现、文件写入或执行。真实编译、归档、链接和运行沿用现有 AutoTest 场景；本轮本地只运行单元测试，不运行 Setup 或 CXToolchain AutoTest。
