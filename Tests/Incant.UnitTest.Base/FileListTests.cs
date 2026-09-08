@@ -544,7 +544,15 @@ public sealed class FileListTests : IDisposable
     {
         foreach (string link in Enumerable.Reverse(_links))
         {
-            Directory.Delete(link);
+            if (OperatingSystem.IsWindows())
+            {
+                Directory.Delete(link);
+            }
+            else
+            {
+                // Unlink the entry even when its target is missing or forms a cycle.
+                File.Delete(link);
+            }
         }
         if (Directory.Exists(_directory))
         {
