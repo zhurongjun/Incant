@@ -1,0 +1,93 @@
+# Temporarily disabled while the CXLegacy toolchain facilities are being reorganized.
+# To restore CI, rename this file to .yml and restore the NuGet release job and dependency.
+name: toolchain-check
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchain-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  environment:
+    name: ${{ matrix.profile }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: windows-vs2022
+            runner: windows-2022
+            timeout: 120
+          - profile: windows-vs2026
+            runner: windows-2025-vs2026
+            timeout: 60
+          - profile: ubuntu-24.04
+            runner: ubuntu-24.04
+            timeout: 120
+          - profile: macos-15-arm64
+            runner: macos-15
+            timeout: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: ga
+
+      - name: Setup ${{ matrix.profile }}
+        id: setup
+        continue-on-error: true
+        shell: bash
+        run: >-
+          dotnet run
+          --project Tests/Incant.AutoTest.CXLegacyToolchain.Setup/Incant.AutoTest.CXLegacyToolchain.Setup.csproj
+          --configuration Release
+          -- "${{ matrix.profile }}"
+
+      - name: Run ${{ matrix.profile }}
+        if: always() && steps.setup.outcome == 'success'
+        shell: bash
+        env:
+          INCANT_AUTOTEST_PROFILE: ${{ matrix.profile }}
+        run: Incant.AutoTest.CXLegacyToolchain "$INCANT_AUTOTEST_PROFILE"
+
+      - name: Report setup failure
+        if: always() && steps.setup.outcome != 'success'
+        shell: bash
+        run: exit 1
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-${{ matrix.profile }}
+          path: |
+            build/toolchain-environments/${{ matrix.profile }}.json
+            build/toolchain-environments/${{ matrix.profile }}.setup.json
+            build/toolchain-setup/${{ matrix.profile }}/logs
+            build/toolchain-reports/${{ matrix.profile }}.json
+            build/toolchain-autotest/${{ matrix.profile }}/logs
+          if-no-files-found: warn

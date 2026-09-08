@@ -1,8 +1,8 @@
 <Solution>
   <Folder Name="/Source/">
-    <Project Path="Source/Incant.CX.Arguments.Generator/Incant.CX.Arguments.Generator.csproj" />
+    <Project Path="Source/Incant.CXLegacy.Arguments.Generator/Incant.CXLegacy.Arguments.Generator.csproj" />
     <Project Path="Source/Incant.Base/Incant.Base.csproj" />
-    <Project Path="Source/Incant.CX/Incant.CX.csproj" />
+    <Project Path="Source/Incant.CXLegacy/Incant.CXLegacy.csproj" />
     <Project Path="Source/Incant/Incant.csproj" />
   </Folder>
   <Folder Name="/Benchmark/">
@@ -15,11 +15,11 @@
     <Project Path="Samples/Incant.Trace.Sample/Incant.Trace.Sample.csproj" />
   </Folder>
   <Folder Name="/Tests/">
-    <Project Path="Tests/Incant.AutoTest.CXToolchain/Incant.AutoTest.CXToolchain.csproj" />
-    <Project Path="Tests/Incant.AutoTest.CXToolchain.Setup/Incant.AutoTest.CXToolchain.Setup.csproj" />
-    <Project Path="Tests/Incant.AutoTest.CXToolchain.Shared/Incant.AutoTest.CXToolchain.Shared.csproj" />
+    <Project Path="Tests/Incant.AutoTest.CXLegacyToolchain/Incant.AutoTest.CXLegacyToolchain.csproj" />
+    <Project Path="Tests/Incant.AutoTest.CXLegacyToolchain.Setup/Incant.AutoTest.CXLegacyToolchain.Setup.csproj" />
+    <Project Path="Tests/Incant.AutoTest.CXLegacyToolchain.Shared/Incant.AutoTest.CXLegacyToolchain.Shared.csproj" />
     <Project Path="Tests/Incant.ProcessTestHelper/Incant.ProcessTestHelper.csproj" />
     <Project Path="Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj" />
-    <Project Path="Tests/Incant.UnitTest.CX/Incant.UnitTest.CX.csproj" />
+    <Project Path="Tests/Incant.UnitTest.CXLegacy/Incant.UnitTest.CXLegacy.csproj" />
   </Folder>
 </Solution>

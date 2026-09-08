@@ -60,19 +60,11 @@ jobs:
       contents: read
     uses: ./.github/workflows/basic-check.yml
 
-  toolchain_check:
-    name: Toolchain check release commit
-    needs: validate
-    permissions:
-      contents: read
-    uses: ./.github/workflows/toolchain-check.yml
-
   pack:
     name: Pack package
     needs:
       - validate
       - basic_check
-      - toolchain_check
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

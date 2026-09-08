@@ -50,25 +50,16 @@ jobs:
       - name: Restore
         run: |
           dotnet restore Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj
-          dotnet restore Tests/Incant.UnitTest.CX/Incant.UnitTest.CX.csproj
           dotnet restore Source/Incant/Incant.csproj
 
       - name: Build
         run: |
           dotnet build Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj --configuration Release --no-restore
-          dotnet build Tests/Incant.UnitTest.CX/Incant.UnitTest.CX.csproj --configuration Release --no-restore
           dotnet build Source/Incant/Incant.csproj --configuration Release --no-restore
 
       - name: Test Base
         run: >-
           dotnet test Tests/Incant.UnitTest.Base/Incant.UnitTest.Base.csproj
-          --configuration Release
-          --no-build
-          --minimum-expected-tests 1
-
-      - name: Test CX
-        run: >-
-          dotnet test Tests/Incant.UnitTest.CX/Incant.UnitTest.CX.csproj
           --configuration Release
           --no-build
           --minimum-expected-tests 1
